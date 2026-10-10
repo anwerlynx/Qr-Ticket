@@ -46,7 +46,9 @@ export default function TicketsDirectoryClient({ initialTickets }: { initialTick
   };
 
   useEffect(() => {
-    fetchTickets();
+    if (!initialTickets || initialTickets.length === 0) {
+      fetchTickets();
+    }
   }, []);
 
   const handleCreate = async (e: React.FormEvent) => {

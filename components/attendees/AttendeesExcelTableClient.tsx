@@ -58,11 +58,34 @@ export default function AttendeesExcelTableClient({
   initialAttendees,
   initialCounts,
 }: AttendeesExcelTableClientProps) {
-  const [attendees, setAttendees] = useState<AttendeeRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [attendees, setAttendees] = useState<AttendeeRecord[]>(initialAttendees || []);
+  const [loading, setLoading] = useState(!initialAttendees || initialAttendees.length === 0);
   const [search, setSearch] = useState("");
   const [approvalFilter, setApprovalFilter] = useState<string>("all");
   const [ticketFilter, setTicketFilter] = useState<string>("all");
+
+  const filteredAttendees = useMemo(() => {
+    return attendees.filter((a) => {
+      const aStatus = a.approvalStatus || "accepted";
+      if (approvalFilter !== "all" && aStatus !== approvalFilter) return false;
+      if (ticketFilter === "with_ticket" && !a.hasTicket) return false;
+      if (ticketFilter === "no_ticket" && a.hasTicket) return false;
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const match =
+          (a.name && a.name.toLowerCase().includes(q)) ||
+          (a.email && a.email.toLowerCase().includes(q)) ||
+          (a.phone && a.phone.includes(q)) ||
+          (a.whatsapp && a.whatsapp.includes(q)) ||
+          (a.job && a.job.toLowerCase().includes(q)) ||
+          (a.faculty && a.faculty.toLowerCase().includes(q)) ||
+          (a.city && a.city.toLowerCase().includes(q)) ||
+          (a.ticketNumber && a.ticketNumber.toLowerCase().includes(q));
+        if (!match) return false;
+      }
+      return true;
+    });
+  }, [attendees, search, approvalFilter, ticketFilter]);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -271,20 +294,14 @@ export default function AttendeesExcelTableClient({
   };
 
   useEffect(() => {
-    fetchAttendees();
+    if (!initialAttendees || initialAttendees.length === 0) {
+      fetchAttendees();
+    }
     checkLocalExcel();
     fetchStaff();
-    const staffTimer = setInterval(fetchStaff, 15000);
+    const staffTimer = setInterval(fetchStaff, 30000);
     return () => clearInterval(staffTimer);
-  }, [approvalFilter, ticketFilter]);
-
-  // Debounced search
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchAttendees();
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [search]);
+  }, []);
 
   // Handle single attendee approval status change
   const handleUpdateStatus = async (id: string, newStatus: ApprovalStatus) => {
@@ -1059,7 +1076,7 @@ export default function AttendeesExcelTableClient({
                       جاري تحميل بيانات المسجلين من قاعدة البيانات...
                     </td>
                   </tr>
-                ) : attendees.length === 0 ? (
+                ) : filteredAttendees.length === 0 ? (
                   <tr>
                     <td colSpan={2 + Object.values(visibleColumns).filter(Boolean).length} className="p-16 text-center text-[#7a7a7a]">
                       <FileSpreadsheet className="mx-auto h-10 w-10 text-neutral-300 mb-2" />
@@ -1070,7 +1087,7 @@ export default function AttendeesExcelTableClient({
                     </td>
                   </tr>
                 ) : (
-                  attendees.map((att, idx) => {
+                  filteredAttendees.map((att, idx) => {
                     const isSelected = selectedIds.has(att.id);
                     const approval = att.approvalStatus || "accepted";
 
@@ -1233,7 +1250,7 @@ export default function AttendeesExcelTableClient({
           {/* Table Footer Summary */}
           <div className="border-t border-[#e5e5e7] bg-[#fafafc] p-3.5 px-4 text-xs text-[#7a7a7a] flex flex-col sm:flex-row items-center justify-between gap-2">
             <div>
-              عرض <strong className="text-[#1d1d1f] font-mono">{attendees.length}</strong> من إجمالي{" "}
+              عرض <strong className="text-[#1d1d1f] font-mono">{filteredAttendees.length}</strong> من إجمالي{" "}
               <strong className="text-[#1d1d1f] font-mono">{counts.total}</strong> مسجل في قاعدة البيانات
             </div>
 

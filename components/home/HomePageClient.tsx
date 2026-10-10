@@ -154,7 +154,9 @@ export default function HomePageClient({
   };
 
   useEffect(() => {
-    fetchDashboardData();
+    if (!initialStats || initialStats.totalRegistered === 0) {
+      fetchDashboardData();
+    }
   }, []);
 
   const handleSelectTicket = (t: TicketData) => {
