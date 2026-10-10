@@ -1199,6 +1199,9 @@ export async function processCheckIn(query: string, station: string = "Terminal 
     }
   }
 
+  const normalized = searchToken.toUpperCase();
+  const withPrefix = normalized.startsWith("NG-") ? normalized : `NG-${normalized}`;
+
   if (await isSupabaseReady()) {
     const supabase = getSupabaseAdmin()!;
     // 1. Try stored procedure if available
@@ -1219,7 +1222,7 @@ export async function processCheckIn(query: string, station: string = "Terminal 
         id, ticket_number, secure_credential, attendee_id, status, event_name, event_date, venue_name, issued_at, checked_in_at,
         attendees ( name, category )
       `)
-      .or(`secure_credential.eq.${searchToken},ticket_number.ilike.${searchToken},id.eq.${searchToken}`)
+      .or(`secure_credential.eq.${searchToken},ticket_number.ilike.${searchToken},ticket_number.ilike.${withPrefix},id.eq.${searchToken}`)
       .limit(1);
 
     if (!sbErr && sbTickets && sbTickets.length > 0) {
@@ -1304,6 +1307,7 @@ export async function processCheckIn(query: string, station: string = "Terminal 
       t.secureCredential === searchToken ||
       t.secureCredential.toLowerCase() === searchToken.toLowerCase() ||
       t.ticketNumber.toUpperCase() === searchToken.toUpperCase() ||
+      t.ticketNumber.toUpperCase() === withPrefix ||
       t.ticketNumber.toUpperCase() === cleanQuery.toUpperCase() ||
       t.id.toLowerCase() === searchToken.toLowerCase() ||
       t.id.toLowerCase() === cleanQuery.toLowerCase()

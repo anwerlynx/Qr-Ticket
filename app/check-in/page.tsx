@@ -282,15 +282,7 @@ function CheckInTerminal() {
       <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1.5">
-            <Link
-              href="/"
-              className="text-xs text-[#7a7a7a] hover:text-[#1d1d1f] flex items-center gap-1 transition-colors"
-            >
-              <ArrowRight className="h-3 w-3" />
-              <span>الرئيسية</span>
-            </Link>
-            <span className="text-neutral-300">/</span>
-            <span className="text-xs font-semibold text-[#0066cc]">محطة التحقق من التذاكر</span>
+            <span className="text-xs font-semibold text-[#0066cc]">Next Gen 2026 • محطة فحص التذاكر</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-semibold text-[#1d1d1f] tracking-tight flex items-center gap-2.5">
             <Scan className="h-7 w-7 text-[#0066cc]" />

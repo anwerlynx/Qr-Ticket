@@ -160,7 +160,7 @@ export async function registerScannerStaff(params: {
     phone: cleanPhone,
     pinHash: hashPin(cleanPin),
     gate: params.gate?.trim() || "البوابة الرئيسية",
-    status: "pending",
+    status: "approved",
     createdAt: new Date().toISOString(),
     totalScans: 0,
   };
