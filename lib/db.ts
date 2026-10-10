@@ -255,12 +255,27 @@ export async function updateAttendee(
 
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseAdmin()!;
-    await supabase.from("attendees").update({
+    const sbUpdate: any = {
       name: updated.name,
       email: updated.email,
       phone: updated.phone || updated.whatsapp,
       category: updated.category,
-    }).eq("id", id);
+    };
+    if (updates.status) sbUpdate.status = updates.status;
+    if (updates.customFields) sbUpdate.custom_fields = updates.customFields;
+    await supabase.from("attendees").update(sbUpdate).eq("id", id);
+
+    if (updates.status === "checked_in") {
+      await supabase.from("tickets").update({
+        status: "used",
+        checked_in_at: new Date().toISOString(),
+      }).eq("attendee_id", id);
+    } else if (updates.status === "registered" || updates.status === "ticket_issued") {
+      await supabase.from("tickets").update({
+        status: "valid",
+        checked_in_at: null,
+      }).eq("attendee_id", id);
+    }
   } else {
     writeJson(ATTENDEES_FILE, attendees);
   }
@@ -274,6 +289,13 @@ export async function updateAttendee(
       if (updates.email) currentTickets[tIndex].attendeeEmail = updates.email;
       if (updates.phone || updates.whatsapp) currentTickets[tIndex].attendeePhone = updates.phone || updates.whatsapp;
       if (updates.category) currentTickets[tIndex].category = updates.category;
+      if (updates.status === "checked_in") {
+        currentTickets[tIndex].status = "used";
+        currentTickets[tIndex].checkedInAt = new Date().toISOString();
+      } else if (updates.status) {
+        currentTickets[tIndex].status = "valid";
+        delete currentTickets[tIndex].checkedInAt;
+      }
       writeJson(DB_FILE, currentTickets);
     }
   }
@@ -305,6 +327,52 @@ export async function bulkUpdateAttendeeApprovalStatus(
         .from("attendees")
         .update({ status: approvalStatus === "rejected" ? "rejected" : "registered" })
         .in("id", ids);
+    } else {
+      writeJson(ATTENDEES_FILE, attendees);
+    }
+    invalidateAttendeesCache();
+  }
+
+  return { updatedCount };
+}
+
+export async function bulkUpdateAttendeeAttendanceStatus(
+  ids: string[],
+  status: "checked_in" | "registered"
+): Promise<{ updatedCount: number }> {
+  const attendees = await getAllAttendees();
+  const idSet = new Set(ids);
+  let updatedCount = 0;
+  const now = new Date().toISOString();
+
+  for (const att of attendees) {
+    if (idSet.has(att.id)) {
+      att.status = status;
+      att.checkedInAt = status === "checked_in" ? now : undefined;
+      att.updatedAt = now;
+      updatedCount++;
+    }
+  }
+
+  if (updatedCount > 0) {
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin()!;
+      await supabase
+        .from("attendees")
+        .update({ status })
+        .in("id", ids);
+
+      if (status === "checked_in") {
+        await supabase
+          .from("tickets")
+          .update({ status: "used", checked_in_at: now })
+          .in("attendee_id", ids);
+      } else {
+        await supabase
+          .from("tickets")
+          .update({ status: "valid", checked_in_at: null })
+          .in("attendee_id", ids);
+      }
     } else {
       writeJson(ATTENDEES_FILE, attendees);
     }

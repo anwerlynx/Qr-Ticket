@@ -46,11 +46,13 @@ export interface AttendeesExcelTableClientProps {
   initialAttendees?: AttendeeRecord[];
   initialCounts?: {
     total: number;
-    accepted: number;
-    pending: number;
-    rejected: number;
+    checkedIn?: number;
+    notCheckedIn?: number;
     hasTicket: number;
     noTicket: number;
+    accepted?: number;
+    pending?: number;
+    rejected?: number;
   };
 }
 
@@ -61,13 +63,15 @@ export default function AttendeesExcelTableClient({
   const [attendees, setAttendees] = useState<AttendeeRecord[]>(initialAttendees || []);
   const [loading, setLoading] = useState(!initialAttendees || initialAttendees.length === 0);
   const [search, setSearch] = useState("");
-  const [approvalFilter, setApprovalFilter] = useState<string>("all");
+  const [attendanceFilter, setAttendanceFilter] = useState<"all" | "checked_in" | "not_checked_in">("all");
   const [ticketFilter, setTicketFilter] = useState<string>("all");
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
 
   const filteredAttendees = useMemo(() => {
     return attendees.filter((a) => {
-      const aStatus = a.approvalStatus || "accepted";
-      if (approvalFilter !== "all" && aStatus !== approvalFilter) return false;
+      const isCheckedIn = a.status === "checked_in";
+      if (attendanceFilter === "checked_in" && !isCheckedIn) return false;
+      if (attendanceFilter === "not_checked_in" && isCheckedIn) return false;
       if (ticketFilter === "with_ticket" && !a.hasTicket) return false;
       if (ticketFilter === "no_ticket" && a.hasTicket) return false;
       if (search.trim()) {
@@ -85,7 +89,7 @@ export default function AttendeesExcelTableClient({
       }
       return true;
     });
-  }, [attendees, search, approvalFilter, ticketFilter]);
+  }, [attendees, search, attendanceFilter, ticketFilter]);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -96,15 +100,31 @@ export default function AttendeesExcelTableClient({
   const [actionNotice, setActionNotice] = useState<string>("");
 
   // Counts summary
-  const [counts, setCounts] = useState(
-    initialCounts || {
-      total: initialAttendees?.length || 0,
-      accepted: initialAttendees?.filter((a) => a.approvalStatus !== "rejected").length || 0,
-      pending: initialAttendees?.filter((a) => a.approvalStatus === "pending").length || 0,
-      rejected: initialAttendees?.filter((a) => a.approvalStatus === "rejected").length || 0,
-      hasTicket: initialAttendees?.filter((a) => a.hasTicket).length || 0,
-      noTicket: initialAttendees?.filter((a) => !a.hasTicket).length || 0,
-    }
+  const [counts, setCounts] = useState<{
+    total: number;
+    checkedIn: number;
+    notCheckedIn: number;
+    hasTicket: number;
+    noTicket: number;
+    accepted?: number;
+    pending?: number;
+    rejected?: number;
+  }>(
+    initialCounts
+      ? {
+          total: initialCounts.total || 0,
+          checkedIn: initialCounts.checkedIn ?? initialAttendees?.filter((a) => a.status === "checked_in").length ?? 0,
+          notCheckedIn: initialCounts.notCheckedIn ?? initialAttendees?.filter((a) => a.status !== "checked_in").length ?? 0,
+          hasTicket: initialCounts.hasTicket || 0,
+          noTicket: initialCounts.noTicket || 0,
+        }
+      : {
+          total: initialAttendees?.length || 0,
+          checkedIn: initialAttendees?.filter((a) => a.status === "checked_in").length || 0,
+          notCheckedIn: initialAttendees?.filter((a) => a.status !== "checked_in").length || 0,
+          hasTicket: initialAttendees?.filter((a) => a.hasTicket).length || 0,
+          noTicket: initialAttendees?.filter((a) => !a.hasTicket).length || 0,
+        }
   );
 
   // Single Attendee Quick Add state
@@ -265,7 +285,7 @@ export default function AttendeesExcelTableClient({
   const fetchAttendees = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/attendees?search=${encodeURIComponent(search)}&approval=${approvalFilter}&ticket=${ticketFilter}`);
+      const res = await fetch(`/api/attendees?search=${encodeURIComponent(search)}&attendance=${attendanceFilter}&ticket=${ticketFilter}`);
       const data = await res.json();
       if (data.attendees) {
         setAttendees(data.attendees);
@@ -303,7 +323,85 @@ export default function AttendeesExcelTableClient({
     return () => clearInterval(staffTimer);
   }, []);
 
-  // Handle single attendee approval status change
+  // Toggle Attendance Status (حاضر / لم يحضر بعد)
+  const handleToggleAttendance = async (attendee: AttendeeRecord) => {
+    const isCurrentlyCheckedIn = attendee.status === "checked_in";
+    const newStatus = isCurrentlyCheckedIn ? "registered" : "checked_in";
+
+    try {
+      setUpdatingStatusId(attendee.id);
+      const res = await fetch(`/api/attendees/${attendee.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "فشل تحديث حالة الحضور");
+        return;
+      }
+
+      setAttendees((prev) =>
+        prev.map((a) =>
+          a.id === attendee.id
+            ? {
+                ...a,
+                status: newStatus,
+                checkedInAt: newStatus === "checked_in" ? new Date().toISOString() : undefined,
+              }
+            : a
+        )
+      );
+
+      setCounts((prev) => ({
+        ...prev,
+        checkedIn: Math.max(0, (prev.checkedIn || 0) + (newStatus === "checked_in" ? 1 : -1)),
+        notCheckedIn: Math.max(0, (prev.notCheckedIn || 0) + (newStatus === "checked_in" ? -1 : 1)),
+      }));
+
+      setActionNotice(
+        newStatus === "checked_in"
+          ? `✓ تم تسجيل حضور "${attendee.name}" وتحديث التذكرة بالداتابيز`
+          : `✓ تم إلغاء تسجيل حضور "${attendee.name}"`
+      );
+      setTimeout(() => setActionNotice(""), 3500);
+    } catch (err: any) {
+      alert("حدث خطأ: " + err.message);
+    } finally {
+      setUpdatingStatusId(null);
+    }
+  };
+
+  // Bulk Attendance Change (حاضرين / لم يحضروا بعد)
+  const handleBulkAttendance = async (status: "checked_in" | "registered") => {
+    if (selectedIds.size === 0) return;
+    try {
+      setLoading(true);
+      const res = await fetch("/api/attendees/bulk-checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: Array.from(selectedIds),
+          status,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSelectedIds(new Set());
+        fetchAttendees();
+        setActionNotice(`✓ ${data.message}`);
+        setTimeout(() => setActionNotice(""), 4000);
+      } else {
+        alert(data.error || "فشل تحديث الحضور للمحددين");
+      }
+    } catch (err: any) {
+      alert("خطأ: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle single attendee approval status change (legacy support)
   const handleUpdateStatus = async (id: string, newStatus: ApprovalStatus) => {
     try {
       const res = await fetch(`/api/attendees/${id}/approval`, {
@@ -320,32 +418,6 @@ export default function AttendeesExcelTableClient({
       }
     } catch (err) {
       console.error(err);
-    }
-  };
-
-  // Handle bulk approval status change
-  const handleBulkStatus = async (newStatus: ApprovalStatus) => {
-    if (selectedIds.size === 0) return;
-    try {
-      setLoading(true);
-      const res = await fetch("/api/attendees/bulk-approval", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ids: Array.from(selectedIds),
-          approvalStatus: newStatus,
-        }),
-      });
-      if (res.ok) {
-        setSelectedIds(new Set());
-        fetchAttendees();
-        setActionNotice(`تم تحديث حالة ${selectedIds.size} مشارك بنجاح`);
-        setTimeout(() => setActionNotice(""), 3500);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -379,15 +451,14 @@ export default function AttendeesExcelTableClient({
       "الوظيفة": a.job || "",
       "الكلية / الجهة": a.faculty || "",
       "العنوان / المحافظة": a.city || "",
-      "مصدر المعرفة": a.referralSource || "",
-      "حالة القبول": a.approvalStatus === "accepted" ? "مقبول" : a.approvalStatus === "pending" ? "قيد المراجعة" : "مرفوض",
+      "حالة الحضور": a.status === "checked_in" ? "حاضر ✓" : "لم يحضر بعد",
       "حالة التذكرة": a.hasTicket ? `صادرة (${a.ticketNumber || ""})` : "غير صادرة",
       "فئة التذكرة": a.category || "General",
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "كشف الحضور والقبول");
+    XLSX.utils.book_append_sheet(wb, ws, "كشف الحضور والتذاكر");
     XLSX.writeFile(wb, `NextGen_Attendees_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -773,87 +844,73 @@ export default function AttendeesExcelTableClient({
           </div>
         )}
 
-        {/* 6 Statistical Metric Capsules */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-          <div className="rounded-[16px] bg-white p-3.5 border border-[#e5e5e7] shadow-2xs">
-            <span className="text-[11px] text-[#7a7a7a] block">إجمالي المسجلين</span>
-            <span className="text-xl sm:text-2xl font-semibold text-[#1d1d1f] font-mono mt-1 block">
+        {/* 4 Essential Gate & Attendance Metric Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <div
+            onClick={() => {
+              setAttendanceFilter("all");
+              setTicketFilter("all");
+            }}
+            className={`rounded-[16px] p-4 border shadow-2xs cursor-pointer transition-all ${
+              attendanceFilter === "all" && ticketFilter === "all"
+                ? "bg-slate-50 border-slate-300 ring-2 ring-slate-200"
+                : "bg-white border-[#e5e5e7] hover:border-slate-300"
+            }`}
+          >
+            <span className="text-[11px] text-[#7a7a7a] block font-medium">إجمالي المسجلين</span>
+            <span className="text-2xl sm:text-3xl font-bold text-[#1d1d1f] font-mono mt-1 block">
               {counts.total}
             </span>
           </div>
 
           <div
-            onClick={() => setApprovalFilter("accepted")}
-            className={`rounded-[16px] p-3.5 border shadow-2xs cursor-pointer transition-all ${
-              approvalFilter === "accepted" ? "bg-emerald-50/80 border-emerald-300 ring-2 ring-emerald-200" : "bg-white border-[#e5e5e7] hover:border-emerald-200"
+            onClick={() => setAttendanceFilter("checked_in")}
+            className={`rounded-[16px] p-4 border shadow-2xs cursor-pointer transition-all ${
+              attendanceFilter === "checked_in"
+                ? "bg-emerald-50/90 border-emerald-300 ring-2 ring-emerald-200"
+                : "bg-white border-[#e5e5e7] hover:border-emerald-200"
             }`}
           >
-            <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
-              <CheckCircle2 className="h-3 w-3" />
-              <span>المقبولين</span>
+            <span className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <span>حاضرين في القاعة</span>
             </span>
-            <span className="text-xl sm:text-2xl font-semibold text-emerald-700 font-mono mt-1 block">
-              {counts.accepted}
+            <span className="text-2xl sm:text-3xl font-bold text-emerald-700 font-mono mt-1 block">
+              {counts.checkedIn || 0}
             </span>
           </div>
 
           <div
-            onClick={() => setApprovalFilter("pending")}
-            className={`rounded-[16px] p-3.5 border shadow-2xs cursor-pointer transition-all ${
-              approvalFilter === "pending" ? "bg-amber-50/80 border-amber-300 ring-2 ring-amber-200" : "bg-white border-[#e5e5e7] hover:border-amber-200"
+            onClick={() => setAttendanceFilter("not_checked_in")}
+            className={`rounded-[16px] p-4 border shadow-2xs cursor-pointer transition-all ${
+              attendanceFilter === "not_checked_in"
+                ? "bg-amber-50/90 border-amber-300 ring-2 ring-amber-200"
+                : "bg-white border-[#e5e5e7] hover:border-amber-200"
             }`}
           >
-            <span className="text-[11px] text-amber-700 font-medium flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              <span>قيد المراجعة</span>
+            <span className="text-[11px] text-amber-700 font-semibold flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" />
+              <span>لم يحضروا بعد</span>
             </span>
-            <span className="text-xl sm:text-2xl font-semibold text-amber-700 font-mono mt-1 block">
-              {counts.pending}
+            <span className="text-2xl sm:text-3xl font-bold text-amber-700 font-mono mt-1 block">
+              {counts.notCheckedIn || 0}
             </span>
           </div>
 
           <div
-            onClick={() => setApprovalFilter("rejected")}
-            className={`rounded-[16px] p-3.5 border shadow-2xs cursor-pointer transition-all ${
-              approvalFilter === "rejected" ? "bg-red-50/80 border-red-300 ring-2 ring-red-200" : "bg-white border-[#e5e5e7] hover:border-red-200"
+            onClick={() => setTicketFilter(ticketFilter === "with_ticket" ? "all" : "with_ticket")}
+            className={`rounded-[16px] p-4 border shadow-2xs cursor-pointer transition-all ${
+              ticketFilter === "with_ticket"
+                ? "bg-purple-50/90 border-purple-300 ring-2 ring-purple-200"
+                : "bg-white border-[#e5e5e7] hover:border-purple-200"
             }`}
           >
-            <span className="text-[11px] text-red-700 font-medium flex items-center gap-1">
-              <XCircle className="h-3 w-3" />
-              <span>المرفوضين</span>
+            <span className="text-[11px] text-[#8a38f5] font-semibold flex items-center gap-1.5">
+              <Ticket className="h-3.5 w-3.5" />
+              <span>تذاكر صادرة</span>
             </span>
-            <span className="text-xl sm:text-2xl font-semibold text-red-700 font-mono mt-1 block">
-              {counts.rejected}
-            </span>
-          </div>
-
-          <div
-            onClick={() => setTicketFilter("with_ticket")}
-            className={`rounded-[16px] p-3.5 border shadow-2xs cursor-pointer transition-all ${
-              ticketFilter === "with_ticket" ? "bg-purple-50/80 border-purple-300 ring-2 ring-purple-200" : "bg-white border-[#e5e5e7] hover:border-purple-200"
-            }`}
-          >
-            <span className="text-[11px] text-[#8a38f5] font-medium flex items-center gap-1">
-              <Ticket className="h-3 w-3" />
-              <span>صادرة لهم تذاكر</span>
-            </span>
-            <span className="text-xl sm:text-2xl font-semibold text-[#8a38f5] font-mono mt-1 block">
+            <span className="text-2xl sm:text-3xl font-bold text-[#8a38f5] font-mono mt-1 block">
               {counts.hasTicket}
-            </span>
-          </div>
-
-          <div
-            onClick={() => setTicketFilter("no_ticket")}
-            className={`rounded-[16px] p-3.5 border shadow-2xs cursor-pointer transition-all ${
-              ticketFilter === "no_ticket" ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-200" : "bg-white border-[#e5e5e7] hover:border-blue-200"
-            }`}
-          >
-            <span className="text-[11px] text-[#0066cc] font-medium flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              <span>بانتظار التذكرة</span>
-            </span>
-            <span className="text-xl sm:text-2xl font-semibold text-[#0066cc] font-mono mt-1 block">
-              {counts.noTicket}
             </span>
           </div>
         </div>
@@ -876,16 +933,15 @@ export default function AttendeesExcelTableClient({
           {/* Filters & Bulk Actions */}
           <div className="flex flex-wrap items-center gap-2">
             
-            {/* Approval Filter */}
+            {/* Attendance Filter */}
             <select
-              value={approvalFilter}
-              onChange={(e) => setApprovalFilter(e.target.value)}
-              className="rounded-full border border-[#e5e5e7] bg-white px-3.5 py-1.5 text-xs text-[#1d1d1f] focus:border-[#0066cc] focus:outline-none"
+              value={attendanceFilter}
+              onChange={(e) => setAttendanceFilter(e.target.value as any)}
+              className="rounded-full border border-[#e5e5e7] bg-white px-3.5 py-1.5 text-xs text-[#1d1d1f] focus:border-[#0066cc] focus:outline-none font-medium"
             >
-              <option value="all">كل حالات القبول</option>
-              <option value="accepted">المقبولين فقط ✓</option>
-              <option value="pending">قيد المراجعة ⏳</option>
-              <option value="rejected">المرفوضين ✕</option>
+              <option value="all">كل حالات الحضور</option>
+              <option value="checked_in">حاضرين فقط ✓</option>
+              <option value="not_checked_in">لم يحضروا بعد ⏳</option>
             </select>
 
             {/* Ticket Filter */}
@@ -913,25 +969,21 @@ export default function AttendeesExcelTableClient({
                   className="btn-press flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-gradient-to-r from-[#6c12e8] to-[#4a0bb8] text-white shadow-xs hover:opacity-95 transition-all cursor-pointer"
                 >
                   <Send className="h-3 w-3" />
-                  <span>إرسال التذكرة للمحددين ({selectedIds.size})</span>
+                  <span>إرسال التذكرة ({selectedIds.size})</span>
                 </button>
                 <button
-                  onClick={() => handleBulkStatus("accepted")}
-                  className="btn-press px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={() => handleBulkAttendance("checked_in")}
+                  className="btn-press flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer shadow-2xs"
                 >
-                  قبول
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span>تسجيل الحضور ✓</span>
                 </button>
                 <button
-                  onClick={() => handleBulkStatus("pending")}
-                  className="btn-press px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-500 text-white hover:bg-amber-600"
+                  onClick={() => handleBulkAttendance("registered")}
+                  className="btn-press flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold bg-neutral-600 text-white hover:bg-neutral-700 cursor-pointer shadow-2xs"
                 >
-                  مراجعة
-                </button>
-                <button
-                  onClick={() => handleBulkStatus("rejected")}
-                  className="btn-press px-2.5 py-1 rounded-full text-[11px] font-semibold bg-red-600 text-white hover:bg-red-700"
-                >
-                  رفض
+                  <Clock className="h-3 w-3" />
+                  <span>إلغاء الحضور</span>
                 </button>
                 <button
                   onClick={handleDeleteSelectedAttendees}
@@ -974,7 +1026,7 @@ export default function AttendeesExcelTableClient({
                       { key: "job", label: "الوظيفة" },
                       { key: "faculty", label: "الكلية / الجهة" },
                       { key: "city", label: "المحافظة / العنوان" },
-                      { key: "approval", label: "حالة القبول" },
+                      { key: "approval", label: "حالة الحضور" },
                       { key: "ticket", label: "حالة التذكرة" },
                       { key: "actions", label: "الإجراءات والتعديل" },
                     ].map((col) => (
@@ -1055,7 +1107,7 @@ export default function AttendeesExcelTableClient({
                   {visibleColumns.city && <th className="p-3 font-semibold text-[#1d1d1f]">العنوان / المحافظة</th>}
                   {visibleColumns.approval && (
                     <th className="p-3 font-semibold text-[#1d1d1f] text-center w-36">
-                      حالة القبول
+                      حالة الحضور
                     </th>
                   )}
                   {visibleColumns.ticket && (
@@ -1089,7 +1141,6 @@ export default function AttendeesExcelTableClient({
                 ) : (
                   filteredAttendees.map((att, idx) => {
                     const isSelected = selectedIds.has(att.id);
-                    const approval = att.approvalStatus || "accepted";
 
                     return (
                       <tr
@@ -1156,26 +1207,33 @@ export default function AttendeesExcelTableClient({
                           <td className="p-3 text-neutral-600 whitespace-nowrap">{att.city || "-"}</td>
                         )}
 
-                        {/* APPROVAL STATUS SELECTOR / TOGGLE */}
+                        {/* ATTENDANCE STATUS TOGGLE (حاضر / لم يحضر بعد) */}
                         {visibleColumns.approval && (
                           <td className="p-3 text-center">
-                            <div className="inline-flex items-center">
-                              <select
-                                value={approval}
-                                onChange={(e) => handleUpdateStatus(att.id, e.target.value as ApprovalStatus)}
-                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold border cursor-pointer focus:outline-none transition-colors ${
-                                  approval === "accepted"
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
-                                    : approval === "pending"
-                                    ? "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
-                                    : "bg-red-50 text-red-700 border-red-300 hover:bg-red-100"
-                                }`}
-                              >
-                                <option value="accepted">✓ مقبول</option>
-                                <option value="pending">⏳ قيد المراجعة</option>
-                                <option value="rejected">✕ مرفوض</option>
-                              </select>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleAttendance(att)}
+                              disabled={updatingStatusId === att.id}
+                              title={
+                                att.status === "checked_in"
+                                  ? "انقر لإلغاء تسجيل الحضور"
+                                  : "انقر لتسجيل حضور الشخص الآن في القاعة"
+                              }
+                              className={`btn-press inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border transition-all cursor-pointer ${
+                                att.status === "checked_in"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 shadow-2xs"
+                                  : "bg-neutral-100 text-neutral-600 border-neutral-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300"
+                              }`}
+                            >
+                              {updatingStatusId === att.id ? (
+                                <RefreshCw className="h-3 w-3 animate-spin text-emerald-600" />
+                              ) : att.status === "checked_in" ? (
+                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                              ) : (
+                                <Clock className="h-3.5 w-3.5 text-neutral-400" />
+                              )}
+                              <span>{att.status === "checked_in" ? "حاضر ✓" : "لم يحضر بعد"}</span>
+                            </button>
                           </td>
                         )}
 

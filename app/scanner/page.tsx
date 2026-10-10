@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Scan,
   CheckCircle2,
@@ -17,6 +18,7 @@ import {
   User,
   Clock,
   RefreshCw,
+  Users,
 } from "lucide-react";
 import { Button } from "@heroui/react";
 import jsQR from "jsqr";
@@ -406,9 +408,9 @@ export default function GateScannerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#07080d] text-white flex flex-col justify-between selection:bg-purple-500 font-sans pb-10">
-      {/* Top Gate Bar - 100% Isolated, Zero Admin Links */}
-      <header className="sticky top-0 z-30 px-4 py-3.5 bg-[#0f111a]/95 border-b border-white/10 backdrop-blur-xl flex items-center justify-between">
+    <div className="min-h-screen bg-[#0b0f19] text-white flex flex-col justify-between selection:bg-purple-500 font-sans pb-10">
+      {/* Top Gate Bar with Quick Navigation */}
+      <header className="sticky top-0 z-30 px-4 py-3.5 bg-[#0f172a]/95 border-b border-slate-800 backdrop-blur-xl flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-600/30">
             <Scan className="h-5 w-5" />
@@ -418,37 +420,47 @@ export default function GateScannerPage() {
               <span>{staff?.gate || "بوابة الدخول"}</span>
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
             </h1>
-            <p className="text-[11px] text-neutral-400">
-              المنظم: <span className="text-neutral-200 font-bold">{staff?.name}</span>
+            <p className="text-[11px] text-slate-400">
+              المنظم: <span className="text-slate-200 font-bold">{staff?.name}</span>
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Back to Attendees Table Link */}
+          <Link
+            href="/attendees"
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-700 transition-colors"
+            title="الانتقال لجدول الحضور"
+          >
+            <Users className="h-3.5 w-3.5 text-sky-400" />
+            <span className="hidden sm:inline">جدول الحضور</span>
+          </Link>
+
           {/* Sound Toggle */}
           <button
             type="button"
             onClick={() => setSoundEnabled(!soundEnabled)}
-            className="p-2.5 rounded-xl bg-[#171a26] hover:bg-[#202436] text-neutral-300 text-xs flex items-center gap-1.5 border border-[#2b3046] transition-colors cursor-pointer"
+            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5 border border-slate-700 transition-colors cursor-pointer"
             title={soundEnabled ? "كتم الصوت" : "تشغيل الصوت"}
           >
             {soundEnabled ? (
               <Volume2 className="h-4 w-4 text-emerald-400" />
             ) : (
-              <VolumeX className="h-4 w-4 text-neutral-500" />
+              <VolumeX className="h-4 w-4 text-slate-500" />
             )}
           </button>
 
           {/* Session Counter Badge */}
-          <div className="px-3 py-1.5 rounded-xl bg-purple-600/15 border border-purple-500/30 text-purple-300 font-mono text-xs font-bold">
-            {sessionScans} تم فحصهم
+          <div className="px-3 py-1.5 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-300 font-mono text-xs font-bold">
+            {sessionScans} حاضر
           </div>
 
           {/* Logout */}
           <button
             type="button"
             onClick={handleLogout}
-            className="p-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/25 transition-colors cursor-pointer"
+            className="p-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
             title="تسجيل الخروج"
           >
             <LogOut className="h-4 w-4" />
@@ -539,9 +551,9 @@ export default function GateScannerPage() {
           </div>
         )}
 
-        {/* 100% Native Crash-Proof Camera Scanner Viewport */}
-        <div className="relative rounded-3xl overflow-hidden bg-[#11131c] border border-white/10 shadow-2xl">
-          <div className="w-full aspect-square max-h-[350px] flex items-center justify-center bg-black relative overflow-hidden">
+        {/* Crisp Modern Camera Scanner Viewport */}
+        <div className="relative rounded-3xl overflow-hidden bg-slate-900 border border-slate-700/80 shadow-2xl">
+          <div className="w-full aspect-square max-h-[360px] flex items-center justify-center bg-slate-950 relative overflow-hidden">
             {/* The Native Video Element (zero third-party DOM mutation) */}
             <video
               ref={videoRef}
@@ -556,35 +568,36 @@ export default function GateScannerPage() {
             {/* Neon Scanner Overlay Frame when active */}
             {isCameraActive && (
               <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                <div className="w-60 h-60 rounded-2xl border-2 border-purple-500/60 relative shadow-[0_0_25px_rgba(168,85,247,0.3)]">
+                <div className="w-64 h-64 rounded-2xl border-2 border-purple-500/70 relative shadow-[0_0_30px_rgba(168,85,247,0.35)]">
                   {/* Neon Corners */}
-                  <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-purple-400 rounded-tl-lg" />
-                  <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-purple-400 rounded-tr-lg" />
-                  <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-purple-400 rounded-bl-lg" />
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-purple-400 rounded-br-lg" />
+                  <div className="absolute -top-1 -left-1 w-7 h-7 border-t-4 border-l-4 border-purple-400 rounded-tl-xl" />
+                  <div className="absolute -top-1 -right-1 w-7 h-7 border-t-4 border-r-4 border-purple-400 rounded-tr-xl" />
+                  <div className="absolute -bottom-1 -left-1 w-7 h-7 border-b-4 border-l-4 border-purple-400 rounded-bl-xl" />
+                  <div className="absolute -bottom-1 -right-1 w-7 h-7 border-b-4 border-r-4 border-purple-400 rounded-br-xl" />
                   {/* Laser Beam Animation */}
-                  <div className="w-full h-1 bg-gradient-to-r from-transparent via-purple-400 to-transparent shadow-[0_0_12px_rgba(192,132,252,0.9)] animate-pulse mt-28" />
+                  <div className="w-full h-1 bg-gradient-to-r from-transparent via-purple-300 to-transparent shadow-[0_0_15px_rgba(192,132,252,1)] animate-pulse mt-30" />
                 </div>
               </div>
             )}
 
-            {/* Stopped Placeholder */}
+            {/* Stopped Placeholder with clear contrast & button */}
             {!isCameraActive && (
-              <div className="text-center p-6 space-y-3.5">
-                <div className="h-16 w-16 rounded-2xl bg-purple-600/15 border border-purple-500/30 text-purple-400 flex items-center justify-center mx-auto shadow-lg shadow-purple-900/30">
-                  <Camera className="h-8 w-8" />
+              <div className="text-center p-6 space-y-4 max-w-xs">
+                <div className="h-20 w-20 rounded-3xl bg-purple-600/20 border border-purple-500/40 text-purple-300 flex items-center justify-center mx-auto shadow-xl shadow-purple-900/30">
+                  <Scan className="h-10 w-10 text-purple-300" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">الكاميرا متوقفة</h3>
-                  <p className="text-xs text-neutral-400 mt-1">
-                    اضغط الزر لتشغيل الكاميرا ومسح رموز QR فورياً
+                  <h3 className="text-base font-bold text-white">كاميرا فحص التذاكر</h3>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    وجّه كاميرا الهاتف نحو باركود تذكرة الحاضر لمسحها فورياً وتسجيل حضوره في القاعة.
                   </p>
                 </div>
                 <Button
                   onClick={startCamera}
-                  className="rounded-2xl font-black text-xs bg-gradient-to-r from-purple-600 to-indigo-600 hover:brightness-110 text-white shadow-lg shadow-purple-600/30 px-7 h-11 cursor-pointer"
+                  className="w-full rounded-2xl font-black text-xs bg-gradient-to-r from-purple-600 to-indigo-600 hover:brightness-110 text-white shadow-lg shadow-purple-600/40 px-6 h-12 cursor-pointer flex items-center justify-center gap-2"
                 >
-                  تشغيل الكاميرا الآن
+                  <Camera className="h-4 w-4" />
+                  <span>تشغيل الكاميرا والمسح الآن</span>
                 </Button>
               </div>
             )}
@@ -592,7 +605,7 @@ export default function GateScannerPage() {
 
           {/* Camera controls toolbar */}
           {isCameraActive && (
-            <div className="p-3 bg-[#0c0d14] border-t border-white/10 flex items-center justify-between text-xs">
+            <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-xs">
               <span className="text-emerald-400 flex items-center gap-2 font-bold">
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
                 الكاميرا تقرأ الآن... وجّه نحو التذكرة
@@ -616,10 +629,10 @@ export default function GateScannerPage() {
         </div>
 
         {/* Manual Code Input Fallback */}
-        <div className="p-5 rounded-3xl bg-[#11131c] border border-white/10 shadow-xl space-y-3">
-          <label className="block text-xs font-bold text-neutral-300 text-right flex items-center justify-between">
+        <div className="p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+          <label className="block text-xs font-bold text-slate-300 text-right flex items-center justify-between">
             <span>إدخال كود التذكرة يدوياً</span>
-            <span className="text-[10px] text-neutral-400 font-normal">في حال تعذر قراءة الباركود</span>
+            <span className="text-[10px] text-slate-400 font-normal">في حال تعذر قراءة الباركود</span>
           </label>
           <div className="flex gap-2">
             <input
@@ -633,7 +646,7 @@ export default function GateScannerPage() {
                   handleVerify(manualCode);
                 }
               }}
-              className="flex-1 h-12 px-4 rounded-2xl bg-[#171a26] border border-[#2b3046] text-white font-mono text-center text-sm font-bold placeholder:text-neutral-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all uppercase"
+              className="flex-1 h-12 px-4 rounded-2xl bg-slate-950 border border-slate-700 text-white font-mono text-center text-sm font-bold placeholder:text-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all uppercase"
             />
             <Button
               isLoading={loading}
@@ -645,9 +658,9 @@ export default function GateScannerPage() {
           </div>
         </div>
 
-        {/* Scanned Attendees Feed - "مين اللي هو سجله" */}
-        <div className="p-5 rounded-3xl bg-[#11131c] border border-white/10 shadow-xl space-y-3">
-          <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+        {/* Scanned Attendees Feed */}
+        <div className="p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
             <h3 className="text-xs font-bold text-white flex items-center gap-2">
               <History className="h-4 w-4 text-purple-400" />
               <span>الأشخاص الذين قمت بفحصهم ({recentScans.length})</span>

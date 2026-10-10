@@ -6,6 +6,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
     const approval = searchParams.get("approval") || "all";
+    const attendance = searchParams.get("attendance") || "all";
     const ticketFilter = searchParams.get("ticket") || "all";
 
     const attendees = await getAllAttendees();
@@ -23,6 +24,12 @@ export async function GET(request: Request) {
         (a.city && a.city.toLowerCase().includes(search)) ||
         (a.ticketNumber && a.ticketNumber.toLowerCase().includes(search));
 
+      // Attendance filter: all, checked_in, not_checked_in
+      const matchAttendance =
+        attendance === "all" ||
+        (attendance === "checked_in" && a.status === "checked_in") ||
+        (attendance === "not_checked_in" && a.status !== "checked_in");
+
       // Approval filter: all, accepted, pending, rejected
       const currentApproval = a.approvalStatus || "accepted";
       const matchApproval = approval === "all" || currentApproval === approval;
@@ -33,7 +40,7 @@ export async function GET(request: Request) {
         (ticketFilter === "with_ticket" && a.hasTicket) ||
         (ticketFilter === "no_ticket" && !a.hasTicket);
 
-      return matchSearch && matchApproval && matchTicket;
+      return matchSearch && matchAttendance && matchApproval && matchTicket;
     });
 
     return NextResponse.json({
@@ -42,11 +49,13 @@ export async function GET(request: Request) {
       total: attendees.length,
       counts: {
         total: attendees.length,
+        checkedIn: attendees.filter((a) => a.status === "checked_in").length,
+        notCheckedIn: attendees.filter((a) => a.status !== "checked_in").length,
+        hasTicket: attendees.filter((a) => a.hasTicket).length,
+        noTicket: attendees.filter((a) => !a.hasTicket).length,
         accepted: attendees.filter((a) => (a.approvalStatus || "accepted") === "accepted").length,
         pending: attendees.filter((a) => a.approvalStatus === "pending").length,
         rejected: attendees.filter((a) => a.approvalStatus === "rejected").length,
-        hasTicket: attendees.filter((a) => a.hasTicket).length,
-        noTicket: attendees.filter((a) => !a.hasTicket).length,
       },
     });
   } catch (err: any) {
