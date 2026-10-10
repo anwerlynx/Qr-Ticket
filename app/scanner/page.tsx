@@ -14,19 +14,19 @@ import {
   VolumeX,
   History,
   ShieldCheck,
-  Search,
   User,
   Clock,
   RefreshCw,
-  Sparkles,
 } from "lucide-react";
 import { Button } from "@heroui/react";
+import jsQR from "jsqr";
 import { CheckInResult } from "@/types/ticket";
 
 // Web Audio API Synthesized Audio Feedback
 function playSound(type: "success" | "error") {
   try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextClass) return;
     const ctx = new AudioContextClass();
 
@@ -90,7 +90,12 @@ export default function GateScannerPage() {
 
   // Auth / Staff state
   const [checkingAuth, setCheckingAuth] = useState(true);
-  const [staff, setStaff] = useState<{ id: string; name: string; gate: string; totalScans: number } | null>(null);
+  const [staff, setStaff] = useState<{
+    id: string;
+    name: string;
+    gate: string;
+    totalScans: number;
+  } | null>(null);
 
   // Scan state
   const [manualCode, setManualCode] = useState("");
@@ -105,8 +110,15 @@ export default function GateScannerPage() {
   // Camera state
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
-  const html5QrCodeRef = useRef<any>(null);
-  const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const isScanningRef = useRef(false);
+  const lastScannedRef = useRef<{ code: string; time: number }>({
+    code: "",
+    time: 0,
+  });
 
   // 1. Verify Scanner Session
   useEffect(() => {
@@ -177,7 +189,6 @@ export default function GateScannerPage() {
         if (soundEnabled) playSound("success");
         setSessionScans((prev) => prev + 1);
 
-        // Add to recent scans list
         if (data.ticket) {
           setRecentScans((prev) => [
             {
@@ -221,56 +232,154 @@ export default function GateScannerPage() {
     }
   };
 
-  // Start live camera QR scanner
-  const startCamera = async () => {
-    setCameraError("");
-    try {
-      const { Html5Qrcode } = await import("html5-qrcode");
+  // Frame scanner loop (Native BarcodeDetector with jsQR fallback)
+  const scanLoop = async () => {
+    if (!isScanningRef.current) return;
 
-      if (html5QrCodeRef.current) {
-        try {
-          await html5QrCodeRef.current.stop();
-        } catch {}
-      }
+    const video = videoRef.current;
+    if (video && video.readyState >= 2) {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
 
-      const qrScanner = new Html5Qrcode("gate-qr-reader");
-      html5QrCodeRef.current = qrScanner;
+      if (width > 0 && height > 0) {
+        let detectedText: string | null = null;
 
-      await qrScanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 15,
-          qrbox: { width: 250, height: 250 },
-          aspectRatio: 1.0,
-        },
-        (decodedText) => {
+        // 1. Try Hardware-Accelerated BarcodeDetector (Chrome/Edge/Safari 17+)
+        if (typeof window !== "undefined" && "BarcodeDetector" in window) {
+          try {
+            const detector = new (window as any).BarcodeDetector({
+              formats: ["qr_code"],
+            });
+            const barcodes = await detector.detect(video);
+            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+              detectedText = barcodes[0].rawValue;
+            }
+          } catch {}
+        }
+
+        // 2. High-performance jsQR Fallback (Works on every browser without DOM manipulation)
+        if (!detectedText) {
+          try {
+            if (!canvasRef.current) {
+              canvasRef.current = document.createElement("canvas");
+            }
+            const canvas = canvasRef.current;
+            // Downscale to 640 max width for 60fps performance if camera is 4K/1080p
+            const scale = Math.min(1, 640 / width);
+            const sw = Math.floor(width * scale);
+            const sh = Math.floor(height * scale);
+
+            canvas.width = sw;
+            canvas.height = sh;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, sw, sh);
+              const imgData = ctx.getImageData(0, 0, sw, sh);
+              const qr = jsQR(imgData.data, sw, sh);
+              if (qr && qr.data) {
+                detectedText = qr.data;
+              }
+            }
+          } catch {}
+        }
+
+        // 3. Process detection with debounce
+        if (detectedText) {
           const now = Date.now();
           if (
-            lastScannedRef.current.code === decodedText &&
-            now - lastScannedRef.current.time < 3000
+            lastScannedRef.current.code !== detectedText ||
+            now - lastScannedRef.current.time > 3000
           ) {
-            return;
+            lastScannedRef.current = { code: detectedText, time: now };
+            handleVerify(detectedText);
           }
-          lastScannedRef.current = { code: decodedText, time: now };
-          handleVerify(decodedText);
-        },
-        () => {}
-      );
+        }
+      }
+    }
 
-      setIsCameraActive(true);
-    } catch (err: any) {
-      console.error("Camera scanner error:", err);
-      setCameraError("تعذر تشغيل الكاميرا. يرجى التأكد من إعطاء صلاحية الكاميرا للمتصفح.");
-      setIsCameraActive(false);
+    if (isScanningRef.current) {
+      animationFrameRef.current = requestAnimationFrame(scanLoop);
     }
   };
 
-  const stopCamera = async () => {
-    if (html5QrCodeRef.current) {
-      try {
-        await html5QrCodeRef.current.stop();
-        html5QrCodeRef.current = null;
-      } catch {}
+  // Start Crash-proof Native Camera
+  const startCamera = async () => {
+    setCameraError("");
+
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices ||
+      !navigator.mediaDevices.getUserMedia
+    ) {
+      setCameraError(
+        "المتصفح لا يدعم الوصول المباشر للكاميرا. يرجى التأكد من فتح الموقع برابط آمن HTTPS."
+      );
+      return;
+    }
+
+    try {
+      // Request rear/back camera with environment facing mode
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute("playsinline", "true");
+        await videoRef.current.play();
+      }
+
+      setIsCameraActive(true);
+      isScanningRef.current = true;
+      animationFrameRef.current = requestAnimationFrame(scanLoop);
+    } catch (err: any) {
+      console.error("Camera access error:", err);
+      setIsCameraActive(false);
+      isScanningRef.current = false;
+
+      if (
+        err.name === "NotAllowedError" ||
+        err.name === "PermissionDeniedError"
+      ) {
+        setCameraError(
+          "تم رفض صلاحية الكاميرا. يرجى منح الإذن للمتصفح بالوصول للكاميرا من إعدادات الهاتف."
+        );
+      } else if (err.name === "NotReadableError") {
+        setCameraError(
+          "الكاميرا قيد الاستخدام بواسطة تطبيق آخر في الهاتف. أغلق التطبيقات الأخرى وحاول ثانية."
+        );
+      } else {
+        setCameraError(
+          "تعذر تشغيل الكاميرا. يرجى إعادة تحميل الصفحة أو التأكد من إعدادات المتصفح."
+        );
+      }
+    }
+  };
+
+  // Stop camera cleanly
+  const stopCamera = () => {
+    isScanningRef.current = false;
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {}
+      });
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
   };
@@ -278,16 +387,12 @@ export default function GateScannerPage() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (html5QrCodeRef.current) {
-        try {
-          html5QrCodeRef.current.stop();
-        } catch {}
-      }
+      stopCamera();
     };
   }, []);
 
   const handleLogout = async () => {
-    await stopCamera();
+    stopCamera();
     await fetch("/api/scanner/session", { method: "POST" });
     router.replace("/scanner/login");
   };
@@ -388,7 +493,9 @@ export default function GateScannerPage() {
                   ? "تذكرة مكررة! تم الدخول بها مسبقاً ⚠️"
                   : "تذكرة غير صالحة ❌"}
               </h2>
-              <p className="text-xs sm:text-sm mt-1 opacity-90 leading-relaxed">{result.message}</p>
+              <p className="text-xs sm:text-sm mt-1 opacity-90 leading-relaxed">
+                {result.message}
+              </p>
             </div>
 
             {/* Attendee Details Card */}
@@ -396,7 +503,9 @@ export default function GateScannerPage() {
               <div className="p-4 rounded-2xl bg-black/50 border border-white/10 text-right space-y-2">
                 <div className="flex justify-between items-center border-b border-white/10 pb-2">
                   <span className="text-xs text-neutral-400">الاسم:</span>
-                  <span className="text-base font-black text-white">{result.ticket.attendeeName}</span>
+                  <span className="text-base font-black text-white">
+                    {result.ticket.attendeeName}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center border-b border-white/10 pb-2">
                   <span className="text-xs text-neutral-400">الفئة:</span>
@@ -406,12 +515,16 @@ export default function GateScannerPage() {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-neutral-400">رقم التذكرة:</span>
-                  <span className="font-mono text-sm font-bold text-neutral-100">{result.ticket.ticketNumber}</span>
+                  <span className="font-mono text-sm font-bold text-neutral-100">
+                    {result.ticket.ticketNumber}
+                  </span>
                 </div>
                 {result.ticket.checkedInAt && (
                   <div className="flex justify-between items-center pt-1.5 border-t border-white/10 text-xs text-amber-300 font-semibold">
                     <span>وقت الفحص الأول:</span>
-                    <span className="font-mono">{new Date(result.ticket.checkedInAt).toLocaleTimeString("ar-EG")}</span>
+                    <span className="font-mono">
+                      {new Date(result.ticket.checkedInAt).toLocaleTimeString("ar-EG")}
+                    </span>
                   </div>
                 )}
               </div>
@@ -426,12 +539,36 @@ export default function GateScannerPage() {
           </div>
         )}
 
-        {/* Live Camera Scanner Viewport */}
+        {/* 100% Native Crash-Proof Camera Scanner Viewport */}
         <div className="relative rounded-3xl overflow-hidden bg-[#11131c] border border-white/10 shadow-2xl">
-          <div
-            id="gate-qr-reader"
-            className="w-full aspect-square max-h-[350px] flex items-center justify-center bg-black relative"
-          >
+          <div className="w-full aspect-square max-h-[350px] flex items-center justify-center bg-black relative overflow-hidden">
+            {/* The Native Video Element (zero third-party DOM mutation) */}
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className={`w-full h-full object-cover ${
+                isCameraActive ? "block" : "hidden"
+              }`}
+            />
+
+            {/* Neon Scanner Overlay Frame when active */}
+            {isCameraActive && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <div className="w-60 h-60 rounded-2xl border-2 border-purple-500/60 relative shadow-[0_0_25px_rgba(168,85,247,0.3)]">
+                  {/* Neon Corners */}
+                  <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-purple-400 rounded-tl-lg" />
+                  <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-purple-400 rounded-tr-lg" />
+                  <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-purple-400 rounded-bl-lg" />
+                  <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-purple-400 rounded-br-lg" />
+                  {/* Laser Beam Animation */}
+                  <div className="w-full h-1 bg-gradient-to-r from-transparent via-purple-400 to-transparent shadow-[0_0_12px_rgba(192,132,252,0.9)] animate-pulse mt-28" />
+                </div>
+              </div>
+            )}
+
+            {/* Stopped Placeholder */}
             {!isCameraActive && (
               <div className="text-center p-6 space-y-3.5">
                 <div className="h-16 w-16 rounded-2xl bg-purple-600/15 border border-purple-500/30 text-purple-400 flex items-center justify-center mx-auto shadow-lg shadow-purple-900/30">
@@ -440,7 +577,7 @@ export default function GateScannerPage() {
                 <div>
                   <h3 className="text-base font-bold text-white">الكاميرا متوقفة</h3>
                   <p className="text-xs text-neutral-400 mt-1">
-                    اضغط الزر بالأسفل لتشغيل الكاميرا ومسح رموز QR فورياً
+                    اضغط الزر لتشغيل الكاميرا ومسح رموز QR فورياً
                   </p>
                 </div>
                 <Button
@@ -458,7 +595,7 @@ export default function GateScannerPage() {
             <div className="p-3 bg-[#0c0d14] border-t border-white/10 flex items-center justify-between text-xs">
               <span className="text-emerald-400 flex items-center gap-2 font-bold">
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
-                الكاميرا تعمل... وجّه نحو التذكرة
+                الكاميرا تقرأ الآن... وجّه نحو التذكرة
               </span>
               <button
                 type="button"
@@ -508,7 +645,7 @@ export default function GateScannerPage() {
           </div>
         </div>
 
-        {/* Scanned Attendees Feed - "ويبقى ظاهر له مين اللي هو سجله" */}
+        {/* Scanned Attendees Feed - "مين اللي هو سجله" */}
         <div className="p-5 rounded-3xl bg-[#11131c] border border-white/10 shadow-xl space-y-3">
           <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
             <h3 className="text-xs font-bold text-white flex items-center gap-2">
