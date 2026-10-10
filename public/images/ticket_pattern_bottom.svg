@@ -1,0 +1,16 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="183.082" height="183.082" viewBox="0 0 183.082 183.082" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<path id="Ellipse 1" d="M183.082 91.541C183.082 142.098 142.098 183.082 91.541 183.082C40.9843 183.082 0 142.098 0 91.541C0 40.9843 40.9843 0 91.541 0C142.098 0 183.082 40.9843 183.082 91.541ZM58.6209 91.541C58.6209 109.722 73.3597 124.461 91.541 124.461C109.722 124.461 124.461 109.722 124.461 91.541C124.461 73.3597 109.722 58.6209 91.541 58.6209C73.3597 58.6209 58.6209 73.3597 58.6209 91.541Z" fill="url(#pattern0_120_2299)"/>
+<defs>
+<pattern id="pattern0_120_2299" patternUnits="userSpaceOnUse" patternTransform="matrix(47.3759 0 0 31.5839 0 0)" preserveAspectRatio="none" viewBox="0 0 210 140" width="1" height="1">
+<g id="pattern0_120_2299_inner">
+<g id="Frame 116">
+<path id="Vector" d="M140 70H210C210 31.3833 178.617 0 140 0V70Z" fill="#6F2DC5"/>
+<path id="Vector_2" d="M140 70L70 70L70 0L140 0V70Z" fill="#B988F9"/>
+<path id="Vector_3" d="M70 70V0C31.3833 0 0 31.3833 0 70H70Z" fill="#A160F7"/>
+<path id="Vector_4" d="M210 70H140C140 108.617 171.383 140 210 140V70Z" fill="#8A38F5"/>
+<path id="Vector_5" d="M140 140H70L70 70L140 70V140Z" fill="#A14BFF"/>
+<path id="Vector_6" d="M0 70H70C70 108.617 38.6167 140 0 140V70Z" fill="#A14BFF"/>
+</g>
+</g>
+</pattern></defs>
+</svg>
