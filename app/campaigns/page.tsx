@@ -26,6 +26,11 @@ import {
   Filter,
   RotateCcw,
   Check,
+  CheckSquare,
+  Square,
+  Users,
+  Layers,
+  X,
 } from "lucide-react";
 import { TicketData, EmailDeliveryRecord, EmailSettings } from "@/types/ticket";
 
@@ -35,11 +40,25 @@ export default function BulkEmailCampaignPage() {
   const [selectedTicket, setSelectedTicket] = useState<TicketData | null>(null);
   const [emailHtml, setEmailHtml] = useState("");
 
-  // Right column active tab: "preview" or "recipients"
+  // Right column active tab: "recipients" or "preview"
   const [activeTab, setActiveTab] = useState<"recipients" | "preview">("recipients");
   const [recipientSearch, setRecipientSearch] = useState("");
   const [recipientFilter, setRecipientFilter] = useState<"all" | "delivered" | "failed" | "pending">("all");
   const [resendingTicketId, setResendingTicketId] = useState<string | null>(null);
+
+  // Multi-row selection for sending batches
+  const [selectedTicketIds, setSelectedTicketIds] = useState<Set<string>>(new Set());
+  const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
+  const [selectedBatchSize, setSelectedBatchSize] = useState<number>(10);
+  const [isSendingSelectedGroup, setIsSendingSelectedGroup] = useState<boolean>(false);
+  const [selectedGroupProgress, setSelectedGroupProgress] = useState<{
+    sent: number;
+    failed: number;
+    total: number;
+    currentBatch: number;
+    totalBatches: number;
+  } | null>(null);
+  const [showSelectedConfirmModal, setShowSelectedConfirmModal] = useState<boolean>(false);
 
   // Test email state
   const [testEmail, setTestEmail] = useState("");
@@ -278,7 +297,136 @@ export default function BulkEmailCampaignPage() {
     }
   };
 
-  // 3. Resend individual ticket
+  // 3. Selection Handlers for Batch Group Sending
+  const toggleSelectAllFiltered = () => {
+    if (selectedTicketIds.size >= filteredRecipients.length && filteredRecipients.length > 0) {
+      setSelectedTicketIds(new Set());
+    } else {
+      setSelectedTicketIds(new Set(filteredRecipients.map((t) => t.id)));
+    }
+  };
+
+  const handleToggleSelectRow = (ticketId: string, index: number, event: React.MouseEvent) => {
+    const next = new Set(selectedTicketIds);
+    if (event.shiftKey && lastSelectedIdx !== null) {
+      const start = Math.min(lastSelectedIdx, index);
+      const end = Math.max(lastSelectedIdx, index);
+      for (let i = start; i <= end; i++) {
+        if (filteredRecipients[i]) {
+          next.add(filteredRecipients[i].id);
+        }
+      }
+    } else {
+      if (next.has(ticketId)) {
+        next.delete(ticketId);
+      } else {
+        next.add(ticketId);
+      }
+      setLastSelectedIdx(index);
+    }
+    setSelectedTicketIds(next);
+  };
+
+  const selectFirstN = (n: number) => {
+    const target = filteredRecipients.slice(0, n);
+    setSelectedTicketIds(new Set(target.map((t) => t.id)));
+  };
+
+  const selectOnlyUnsentInView = () => {
+    const unsent = filteredRecipients.filter(
+      (t) => t.emailStatus !== "delivered" && t.emailStatus !== "sent"
+    );
+    setSelectedTicketIds(new Set(unsent.map((t) => t.id)));
+  };
+
+  const selectOnlyFailedInView = () => {
+    const failed = filteredRecipients.filter((t) => t.emailStatus === "failed");
+    setSelectedTicketIds(new Set(failed.map((t) => t.id)));
+  };
+
+  // 4. Send Selected Group in Batches with Delay
+  const handleSendSelectedGroup = async () => {
+    if (selectedTicketIds.size === 0) return;
+    setShowSelectedConfirmModal(false);
+    setIsSendingSelectedGroup(true);
+    setCampaignResultMsg("");
+
+    const idsList = Array.from(selectedTicketIds);
+    const chunkSize = selectedBatchSize || 10;
+    const totalBatches = Math.ceil(idsList.length / chunkSize);
+
+    setSelectedGroupProgress({
+      sent: 0,
+      failed: 0,
+      total: idsList.length,
+      currentBatch: 0,
+      totalBatches,
+    });
+
+    try {
+      let totalSent = 0;
+      let totalFailed = 0;
+
+      for (let b = 0; b < totalBatches; b++) {
+        const chunk = idsList.slice(b * chunkSize, (b + 1) * chunkSize);
+
+        const res = await fetch("/api/campaigns/send-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticketIds: chunk,
+            limit: chunk.length,
+            delayMs: campaignDelayMs,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "توقف الإرسال بسبب خطأ في الخادم");
+        }
+
+        totalSent += data.sentCount;
+        totalFailed += data.failedCount;
+
+        if (data.results && Array.isArray(data.results)) {
+          setTickets((prev) =>
+            prev.map((t) => {
+              const resItem = data.results.find((r: any) => r.ticketId === t.id);
+              if (resItem) {
+                return {
+                  ...t,
+                  emailStatus: resItem.status,
+                  emailSentAt: resItem.sentAt,
+                  emailError: resItem.error,
+                };
+              }
+              return t;
+            })
+          );
+        }
+
+        setSelectedGroupProgress({
+          sent: totalSent,
+          failed: totalFailed,
+          total: idsList.length,
+          currentBatch: b + 1,
+          totalBatches,
+        });
+      }
+
+      setCampaignResultMsg(
+        `✓ اكتمل إرسال المجموعة المحددة بنجاح: تم إرسال ${totalSent} بريد بنجاح، وتعثر ${totalFailed}.`
+      );
+      setSelectedTicketIds(new Set());
+      fetchTickets();
+    } catch (err: any) {
+      setCampaignResultMsg(`✕ توقف إرسال المجموعة: ${err.message}`);
+    } finally {
+      setIsSendingSelectedGroup(false);
+    }
+  };
+
+  // 5. Resend individual ticket
   const handleResendSingle = async (ticket: TicketData) => {
     try {
       setResendingTicketId(ticket.id);
@@ -751,11 +899,134 @@ export default function BulkEmailCampaignPage() {
                   </div>
                 </div>
 
+                {/* Quick Batch Selection Chips */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] bg-[#fafafc] p-2 rounded-xl border border-[#f0f0f0]">
+                  <span className="text-[#7a7a7a] font-semibold ml-1">تحديد مجموعة:</span>
+                  <button
+                    type="button"
+                    onClick={() => selectFirstN(10)}
+                    className="btn-press px-2.5 py-1 rounded-full bg-white hover:bg-neutral-100 text-neutral-800 font-semibold border border-neutral-200 cursor-pointer transition-colors shadow-2xs"
+                  >
+                    أول 10 صفوف
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectFirstN(25)}
+                    className="btn-press px-2.5 py-1 rounded-full bg-white hover:bg-neutral-100 text-neutral-800 font-semibold border border-neutral-200 cursor-pointer transition-colors shadow-2xs"
+                  >
+                    أول 25 صف
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectFirstN(50)}
+                    className="btn-press px-2.5 py-1 rounded-full bg-white hover:bg-neutral-100 text-neutral-800 font-semibold border border-neutral-200 cursor-pointer transition-colors shadow-2xs"
+                  >
+                    أول 50 صف
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectOnlyUnsentInView}
+                    className="btn-press px-2.5 py-1 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold border border-amber-200 cursor-pointer transition-colors"
+                  >
+                    غير المرسل لهم
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectOnlyFailedInView}
+                    className="btn-press px-2.5 py-1 rounded-full bg-red-50 hover:bg-red-100 text-red-800 font-semibold border border-red-200 cursor-pointer transition-colors"
+                  >
+                    المتعثرين
+                  </button>
+                  {selectedTicketIds.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTicketIds(new Set())}
+                      className="btn-press px-2.5 py-1 rounded-full bg-neutral-200 hover:bg-neutral-300 text-neutral-700 font-medium cursor-pointer transition-colors mr-auto"
+                    >
+                      إلغاء التحديد ({selectedTicketIds.size})
+                    </button>
+                  )}
+                </div>
+
+                {/* Selected Action Bar (Active when 1 or more tickets are selected) */}
+                {selectedTicketIds.size > 0 && (
+                  <div className="rounded-2xl bg-gradient-to-r from-[#6c12e8] to-[#4a0bb8] text-white p-3.5 sm:p-4 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center font-bold font-mono text-sm">
+                        {selectedTicketIds.size}
+                      </div>
+                      <div>
+                        <div className="font-bold text-sm">
+                          تم تحديد {selectedTicketIds.size} تذكرة للإرسال
+                        </div>
+                        <div className="text-[11px] text-purple-200">
+                          اضغط Shift عند النقر على المربع لتحديد نطاق من الصفوف فوراً
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-end">
+                      {/* Batch Size Selector */}
+                      <div className="flex items-center gap-1.5 bg-black/25 px-3 py-1.5 rounded-full text-xs border border-white/10">
+                        <span className="text-purple-200 text-[11px]">حجم الدفعة:</span>
+                        <select
+                          value={selectedBatchSize}
+                          onChange={(e) => setSelectedBatchSize(Number(e.target.value))}
+                          className="bg-transparent text-white font-bold font-mono text-xs focus:outline-none cursor-pointer"
+                        >
+                          <option value={5} className="text-black">5 تذاكر</option>
+                          <option value={10} className="text-black">10 تذاكر</option>
+                          <option value={15} className="text-black">15 تذكرة</option>
+                          <option value={25} className="text-black">25 تذكرة</option>
+                          <option value={50} className="text-black">50 تذكرة</option>
+                        </select>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowSelectedConfirmModal(true)}
+                        disabled={isSendingSelectedGroup}
+                        className="btn-press inline-flex items-center gap-1.5 rounded-full bg-emerald-500 hover:bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-md transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        <span>إرسال للمجموعة المحددة ({selectedTicketIds.size})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTicketIds(new Set())}
+                        className="btn-press rounded-full bg-white/10 hover:bg-white/20 px-3 py-2 text-xs text-purple-200 hover:text-white transition-colors cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Recipients List Table */}
                 <div className="overflow-x-auto max-h-[560px] overflow-y-auto border border-[#f0f0f0] rounded-xl scrollbar-thin">
                   <table className="w-full text-right text-xs border-collapse">
                     <thead className="sticky top-0 bg-[#fafafc] border-b border-[#e5e5e7] text-[#7a7a7a] z-10">
                       <tr>
+                        <th className="p-2.5 w-10 text-center">
+                          <button
+                            type="button"
+                            onClick={toggleSelectAllFiltered}
+                            className="text-[#7a7a7a] hover:text-[#1d1d1f] cursor-pointer inline-flex items-center justify-center"
+                            title="تحديد الكل / إلغاء التحديد"
+                          >
+                            {selectedTicketIds.size > 0 &&
+                            selectedTicketIds.size >= filteredRecipients.length ? (
+                              <CheckSquare className="h-4 w-4 text-[#6c12e8]" />
+                            ) : selectedTicketIds.size > 0 ? (
+                              <div className="h-4 w-4 rounded bg-[#6c12e8] flex items-center justify-center text-white text-[9px] font-bold">
+                                -
+                              </div>
+                            ) : (
+                              <Square className="h-4 w-4" />
+                            )}
+                          </button>
+                        </th>
                         <th className="p-2.5 font-semibold text-[#1d1d1f] w-10 text-center">#</th>
                         <th className="p-2.5 font-semibold text-[#1d1d1f]">المشارك</th>
                         <th className="p-2.5 font-semibold text-[#1d1d1f]">البريد الإلكتروني</th>
@@ -766,26 +1037,47 @@ export default function BulkEmailCampaignPage() {
                     <tbody className="divide-y divide-[#f0f0f0]">
                       {loading && tickets.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="p-10 text-center text-xs text-[#7a7a7a]">
+                          <td colSpan={6} className="p-10 text-center text-xs text-[#7a7a7a]">
                             <RefreshCw className="h-5 w-5 animate-spin mx-auto text-[#0066cc] mb-1.5" />
                             جاري تحميل التذاكر وحالات التوصيل...
                           </td>
                         </tr>
                       ) : filteredRecipients.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="p-10 text-center text-xs text-[#7a7a7a]">
+                          <td colSpan={6} className="p-10 text-center text-xs text-[#7a7a7a]">
                             لا توجد تذاكر مطابقة لخيارات البحث والفلاتر
                           </td>
                         </tr>
                       ) : (
                         filteredRecipients.map((ticket, idx) => {
+                          const isSelected = selectedTicketIds.has(ticket.id);
                           const isDelivered =
                             ticket.emailStatus === "delivered" || ticket.emailStatus === "sent";
                           const isFailed = ticket.emailStatus === "failed";
                           const isPending = !isDelivered && !isFailed;
 
                           return (
-                            <tr key={ticket.id} className="hover:bg-[#fafafc] transition-colors">
+                            <tr
+                              key={ticket.id}
+                              className={`transition-colors ${
+                                isSelected ? "bg-purple-50/70" : "hover:bg-[#fafafc]"
+                              }`}
+                            >
+                              <td className="p-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleToggleSelectRow(ticket.id, idx, e)}
+                                  className="text-[#7a7a7a] hover:text-[#1d1d1f] cursor-pointer"
+                                  title="تحديد الصف (اضغط Shift مع النقر لتحديد نطاق)"
+                                >
+                                  {isSelected ? (
+                                    <CheckSquare className="h-4 w-4 text-[#6c12e8]" />
+                                  ) : (
+                                    <Square className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </td>
+
                               <td className="p-2.5 font-mono text-[11px] text-[#7a7a7a] text-center">
                                 {idx + 1}
                               </td>
@@ -1213,6 +1505,136 @@ export default function BulkEmailCampaignPage() {
                 >
                   تأكيد وبدء الحملة الآن
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CONFIRM SELECTED GROUP DISPATCH */}
+        {showSelectedConfirmModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+            <div dir="rtl" className="w-full max-w-lg rounded-[24px] bg-white p-6 shadow-2xl border border-neutral-200 text-[#1d1d1f]">
+              <div className="flex items-center justify-between border-b border-neutral-100 pb-3 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="h-9 w-9 rounded-full bg-gradient-to-tr from-[#6c12e8] to-[#9333ea] text-white flex items-center justify-center shadow-xs">
+                    <Send className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#1d1d1f]">
+                      تأكيد إرسال المجموعة المحددة
+                    </h3>
+                    <p className="text-xs text-[#7a7a7a]">
+                      سيتم إرسال {selectedTicketIds.size} تذكرة على دفعات منظمة
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSelectedConfirmModal(false)}
+                  className="rounded-full p-1 text-neutral-400 hover:bg-neutral-100 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div className="rounded-2xl bg-neutral-50 p-4 border border-neutral-200 space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#7a7a7a]">إجمالي التذاكر المحددة:</span>
+                    <span className="font-bold font-mono text-[#6c12e8] text-base">{selectedTicketIds.size} تذكرة</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#7a7a7a]">حجم كل دفعة (Batch Size):</span>
+                    <span className="font-semibold bg-white px-2 py-0.5 rounded border border-neutral-200">
+                      {selectedBatchSize} تذاكر في الدفعة
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#7a7a7a]">عدد الدفعات المتوقع:</span>
+                    <span className="font-semibold font-mono text-purple-900">
+                      {Math.ceil(selectedTicketIds.size / selectedBatchSize)} دفعات
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#7a7a7a]">الفاصل الزمني بين الرسائل (Delay):</span>
+                    <span className="font-semibold font-mono text-emerald-700">{campaignDelayMs} ms</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-[11.5px] text-purple-950 leading-relaxed">
+                  ✓ سيتم إرسال التذكرة الإلكترونية الرسمية بالباركود وتفاصيل الفعالية، وتحديث حالة التوصيل فورياً إلى (وصله ✓) في قاعدة البيانات.
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-neutral-100">
+                  <button
+                    onClick={() => setShowSelectedConfirmModal(false)}
+                    className="btn-press px-4 py-2 rounded-full border border-neutral-200 text-[#7a7a7a] hover:bg-neutral-50 text-xs font-semibold cursor-pointer"
+                  >
+                    تراجع
+                  </button>
+                  <button
+                    onClick={handleSendSelectedGroup}
+                    className="btn-press px-5 py-2.5 rounded-full bg-gradient-to-r from-[#6c12e8] to-[#4a0bb8] hover:opacity-95 text-white text-xs font-bold shadow-md cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>ابدأ إرسال المجموعة الآن ({selectedTicketIds.size})</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: SELECTED GROUP LIVE PROGRESS */}
+        {isSendingSelectedGroup && selectedGroupProgress && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+            <div dir="rtl" className="w-full max-w-md rounded-[24px] bg-white p-6 shadow-2xl border border-neutral-200 text-center space-y-4">
+              <div className="h-12 w-12 rounded-full bg-purple-100 text-[#6c12e8] flex items-center justify-center mx-auto">
+                <RefreshCw className="h-6 w-6 animate-spin text-[#6c12e8]" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1d1d1f]">
+                  جاري إرسال المجموعة المحددة...
+                </h3>
+                <p className="text-xs text-[#7a7a7a] mt-1 font-mono">
+                  الدفعة {selectedGroupProgress.currentBatch} من أصل {selectedGroupProgress.totalBatches}
+                </p>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="space-y-1.5">
+                <div className="w-full bg-neutral-100 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-[#6c12e8] to-emerald-500 h-2.5 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.round(
+                        ((selectedGroupProgress.sent + selectedGroupProgress.failed) /
+                          Math.max(1, selectedGroupProgress.total)) *
+                          100
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between text-[11px] text-[#7a7a7a] font-mono">
+                  <span>
+                    تم إنجاز {selectedGroupProgress.sent + selectedGroupProgress.failed} من {selectedGroupProgress.total}
+                  </span>
+                  <span>
+                    {Math.round(
+                      ((selectedGroupProgress.sent + selectedGroupProgress.failed) /
+                        Math.max(1, selectedGroupProgress.total)) *
+                        100
+                    )}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-2 text-emerald-800 font-bold font-mono">
+                  تم الإرسال: {selectedGroupProgress.sent} ✓
+                </div>
+                <div className="rounded-xl bg-red-50 border border-red-200 p-2 text-red-800 font-bold font-mono">
+                  تعثر: {selectedGroupProgress.failed} ✕
+                </div>
               </div>
             </div>
           </div>

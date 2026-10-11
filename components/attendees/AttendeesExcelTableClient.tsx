@@ -619,20 +619,50 @@ export default function AttendeesExcelTableClient({
     }
   };
 
-  // Toggle selection
+  // Toggle selection with Shift-Click range support
+  const [lastSelectedAttendeeIdx, setLastSelectedAttendeeIdx] = useState<number | null>(null);
+
   const toggleSelectAll = () => {
-    if (selectedIds.size === attendees.length) {
+    if (selectedIds.size >= filteredAttendees.length && filteredAttendees.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(attendees.map((a) => a.id)));
+      setSelectedIds(new Set(filteredAttendees.map((a) => a.id)));
     }
   };
 
-  const toggleSelect = (id: string) => {
+  const toggleSelect = (id: string, index?: number, event?: React.MouseEvent) => {
     const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (event?.shiftKey && lastSelectedAttendeeIdx !== null && typeof index === "number") {
+      const start = Math.min(lastSelectedAttendeeIdx, index);
+      const end = Math.max(lastSelectedAttendeeIdx, index);
+      for (let i = start; i <= end; i++) {
+        if (filteredAttendees[i]) {
+          next.add(filteredAttendees[i].id);
+        }
+      }
+    } else {
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      if (typeof index === "number") setLastSelectedAttendeeIdx(index);
+    }
     setSelectedIds(next);
+  };
+
+  const selectFirstNAttendees = (n: number) => {
+    const target = filteredAttendees.slice(0, n);
+    setSelectedIds(new Set(target.map((a) => a.id)));
+  };
+
+  const selectNoTicketAttendees = () => {
+    const target = filteredAttendees.filter((a) => !a.hasTicket);
+    setSelectedIds(new Set(target.map((a) => a.id)));
+  };
+
+  const selectUnsentAttendees = () => {
+    const target = filteredAttendees.filter(
+      (a) => a.emailStatus !== "delivered" && a.emailStatus !== "sent"
+    );
+    setSelectedIds(new Set(target.map((a) => a.id)));
   };
 
   // Column Visibility State
@@ -958,6 +988,55 @@ export default function AttendeesExcelTableClient({
               <option value="no_ticket">بدون تذاكر</option>
             </select>
 
+            {/* Quick Batch Selection Chips */}
+            <div className="flex items-center gap-1 overflow-x-auto text-[11px] bg-white px-2.5 py-1 rounded-full border border-[#e5e5e7]">
+              <span className="text-[#7a7a7a] font-medium whitespace-nowrap px-1">تحديد سريع:</span>
+              <button
+                type="button"
+                onClick={() => selectFirstNAttendees(10)}
+                className="btn-press px-2 py-0.5 rounded-full bg-[#f5f5f7] hover:bg-neutral-200 text-neutral-800 font-semibold cursor-pointer whitespace-nowrap text-[10.5px]"
+              >
+                أول 10
+              </button>
+              <button
+                type="button"
+                onClick={() => selectFirstNAttendees(25)}
+                className="btn-press px-2 py-0.5 rounded-full bg-[#f5f5f7] hover:bg-neutral-200 text-neutral-800 font-semibold cursor-pointer whitespace-nowrap text-[10.5px]"
+              >
+                أول 25
+              </button>
+              <button
+                type="button"
+                onClick={() => selectFirstNAttendees(50)}
+                className="btn-press px-2 py-0.5 rounded-full bg-[#f5f5f7] hover:bg-neutral-200 text-neutral-800 font-semibold cursor-pointer whitespace-nowrap text-[10.5px]"
+              >
+                أول 50
+              </button>
+              <button
+                type="button"
+                onClick={selectUnsentAttendees}
+                className="btn-press px-2 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold border border-amber-200 cursor-pointer whitespace-nowrap text-[10.5px]"
+              >
+                غير المرسل لهم
+              </button>
+              <button
+                type="button"
+                onClick={selectNoTicketAttendees}
+                className="btn-press px-2 py-0.5 rounded-full bg-purple-50 hover:bg-purple-100 text-[#6c12e8] font-semibold border border-purple-200 cursor-pointer whitespace-nowrap text-[10.5px]"
+              >
+                بدون تذكرة
+              </button>
+              {selectedIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="btn-press px-2 py-0.5 rounded-full bg-neutral-200 hover:bg-neutral-300 text-neutral-700 font-medium cursor-pointer whitespace-nowrap text-[10.5px]"
+                >
+                  إلغاء التحديد ({selectedIds.size})
+                </button>
+              )}
+            </div>
+
             {/* Bulk Selection Actions (Active when 1 or more selected) */}
             {selectedIds.size > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 bg-neutral-100 p-1 rounded-full border border-[#e5e5e7]">
@@ -1159,8 +1238,9 @@ export default function AttendeesExcelTableClient({
                         {/* Checkbox */}
                         <td className="p-3 text-center">
                           <button
-                            onClick={() => toggleSelect(att.id)}
-                            className="text-[#7a7a7a] hover:text-[#1d1d1f]"
+                            onClick={(e) => toggleSelect(att.id, idx, e)}
+                            className="text-[#7a7a7a] hover:text-[#1d1d1f] cursor-pointer"
+                            title="تحديد الصف (اضغط Shift مع النقر لتحديد نطاق)"
                           >
                             {isSelected ? (
                               <CheckSquare className="h-4 w-4 text-[#0066cc]" />
