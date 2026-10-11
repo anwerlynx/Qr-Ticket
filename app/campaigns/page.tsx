@@ -537,7 +537,7 @@ export default function BulkEmailCampaignPage() {
   };
 
   // Preset quick fill
-  const applyPreset = (preset: "gmail" | "outlook") => {
+  const applyPreset = (preset: "gmail" | "outlook" | "brevo") => {
     if (preset === "gmail") {
       setEmailSettings((prev) => ({
         ...prev,
@@ -551,6 +551,14 @@ export default function BulkEmailCampaignPage() {
         ...prev,
         provider: "smtp",
         smtpHost: "smtp.office365.com",
+        smtpPort: 587,
+        smtpSecure: false,
+      }));
+    } else if (preset === "brevo") {
+      setEmailSettings((prev) => ({
+        ...prev,
+        provider: "smtp",
+        smtpHost: "smtp-relay.brevo.com",
         smtpPort: 587,
         smtpSecure: false,
       }));
@@ -1274,7 +1282,7 @@ export default function BulkEmailCampaignPage() {
                 {emailSettings.provider === "smtp" && (
                   <>
                     {/* Quick Presets */}
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
                       <span className="text-xs text-[#7a7a7a]">إعداد سريع:</span>
                       <button
                         type="button"
@@ -1285,11 +1293,26 @@ export default function BulkEmailCampaignPage() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => applyPreset("brevo")}
+                        className="btn-press text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full hover:bg-emerald-100 cursor-pointer"
+                      >
+                        Brevo (300 بريد/يوم مجاناً)
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => applyPreset("outlook")}
                         className="btn-press text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full hover:bg-blue-100 cursor-pointer"
                       >
                         Outlook / Office 365
                       </button>
+                    </div>
+
+                    {/* Notice for Gmail limit */}
+                    <div className="rounded-xl bg-amber-50 p-3 border border-amber-200 text-[11px] text-amber-900 leading-relaxed mb-3">
+                      <strong>💡 في حال ظهور خطأ (Daily user sending limit exceeded):</strong>
+                      <p className="mt-0.5">
+                        حسابات Gmail الشخصية تضع حداً أقصى بين 100 إلى 500 بريد كل 24 ساعة. لتجاوز ذلك فوراً وبدون انتظار، يمكنك ببساطة إدخال حساب Gmail آخر وكلمة مرور تطبيقات جديدة، أو استخدام خدمة Brevo المجانية (300 بريد يومياً عبر smtp-relay.brevo.com).
+                      </p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
