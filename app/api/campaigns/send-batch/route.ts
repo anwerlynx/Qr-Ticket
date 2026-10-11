@@ -41,6 +41,8 @@ export async function POST(request: Request) {
         error: sendResult.error,
         mockMode: sendResult.mockMode || settings.provider === "mock",
         provider: sendResult.provider || settings.provider,
+        sentVia: sendResult.sentVia,
+        serverId: sendResult.serverId,
       });
     }
 
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
     let sentCount = 0;
     let failedCount = 0;
     const failures: Array<{ ticketId: string; email: string; error: string }> = [];
+    const sentByServer: Record<string, number> = {};
     const results: Array<{
       ticketId: string;
       attendeeId?: string;
@@ -69,6 +72,8 @@ export async function POST(request: Request) {
       status: "delivered" | "failed";
       error?: string;
       sentAt: string;
+      sentVia?: string;
+      serverId?: string;
     }> = [];
 
     const delayMs = typeof customDelayMs === "number" ? customDelayMs : (settings.delayBetweenEmailsMs ?? 500);
@@ -79,6 +84,9 @@ export async function POST(request: Request) {
       const res = await sendTicketEmail(ticket, { hostUrl });
       if (res.success) {
         sentCount++;
+        const sender = res.sentVia || "default";
+        sentByServer[sender] = (sentByServer[sender] || 0) + 1;
+
         results.push({
           ticketId: ticket.id,
           attendeeId: ticket.attendeeId,
@@ -86,6 +94,8 @@ export async function POST(request: Request) {
           email: ticket.attendeeEmail || "",
           status: "delivered",
           sentAt: now,
+          sentVia: res.sentVia,
+          serverId: res.serverId,
         });
       } else {
         failedCount++;
@@ -102,6 +112,8 @@ export async function POST(request: Request) {
           status: "failed",
           error: res.error,
           sentAt: now,
+          sentVia: res.sentVia,
+          serverId: res.serverId,
         });
       }
 
@@ -119,6 +131,7 @@ export async function POST(request: Request) {
       sentCount,
       failedCount,
       remainingCount,
+      sentByServer,
       failures,
       results,
       delayUsedMs: delayMs,

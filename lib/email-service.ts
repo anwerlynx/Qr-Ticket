@@ -9,6 +9,13 @@ import { getEventSettings } from "./event-settings";
 import { recordEmailDelivery } from "./db";
 import { isSupabaseConfigured, getSupabaseAdmin } from "./supabase";
 
+import {
+  getAllEmailServers,
+  getNextAvailableEmailServer,
+  recordServerSuccess,
+  recordServerFailure,
+} from "./email-servers";
+
 const SETTINGS_FILE = path.join(process.cwd(), "data", "email_settings.json");
 
 const DEFAULT_SETTINGS: EmailSettings = {
@@ -111,9 +118,13 @@ export async function getEmailSettings(): Promise<EmailSettings> {
 }
 
 /**
- * Checks whether an active email provider (Resend or SMTP) is configured
+ * Checks whether an active email provider (Resend, Custom SMTP, or Server Pool) is configured
  */
 export async function isEmailConfigured(): Promise<boolean> {
+  const poolServers = await getAllEmailServers();
+  if (poolServers.some((s) => s.status === "active" && Boolean(s.password))) {
+    return true;
+  }
   const settings = await getEmailSettings();
   if (settings.provider === "resend" && (settings.resendApiKey || process.env.RESEND_API_KEY)) {
     return true;
@@ -182,6 +193,8 @@ export interface SendEmailResult {
   error?: string;
   mockMode?: boolean;
   provider?: string;
+  sentVia?: string;
+  serverId?: string;
 }
 
 /**
@@ -254,7 +267,170 @@ export async function sendTicketEmail(
   const text = generatePlainTextTicket(ticket);
   const subject = `تذكرتك الرسمية: ملتقى الجيل القادم 2026 - ${ticket.attendeeName} [${ticket.ticketNumber}]`;
 
-  // 1. CUSTOM SMTP SENDER (Gmail App Password, Outlook, Custom Domain)
+  // Build inline attachments so barcode and hero art display 100% reliably in Gmail/Outlook
+  const mailAttachments: any[] = [
+    {
+      filename: `ticket-qr.png`,
+      content: qrBuffer,
+      cid: "ticket_qr_barcode",
+      contentType: "image/png",
+    },
+  ];
+
+  if (hasHeroPath) {
+    mailAttachments.push({
+      filename: "ticket-hero.png",
+      path: heroPath,
+      cid: "ticket_hero_art",
+      contentType: "image/png",
+    });
+  }
+
+  // 0. MULTI-SERVER EMAIL POOL (Round-Robin distribution across configured email accounts & automatic failover)
+  const poolServer = await getNextAvailableEmailServer();
+  if (poolServer && poolServer.password) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: poolServer.host,
+        port: poolServer.port || 465,
+        secure: poolServer.secure !== false,
+        auth: {
+          user: poolServer.username,
+          pass: poolServer.password,
+        },
+        tls: {
+          rejectUnauthorized: false,
+        },
+      });
+
+      const fromAddress = `"${settings.fromName || poolServer.name || 'ملتقى الجيل القادم'}" <${poolServer.email}>`;
+      const isPersonalGmail = poolServer.email.includes("@gmail.com");
+      const mailHeaders: Record<string, string> = {
+        "X-Entity-Ref-ID": `ticket-${ticket.id}`,
+      };
+
+      if (!isPersonalGmail && settings.replyTo) {
+        mailHeaders["List-Unsubscribe"] = `<mailto:${settings.replyTo}?subject=unsubscribe>`;
+      }
+
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to: recipient,
+        replyTo: isPersonalGmail ? poolServer.email : (settings.replyTo || poolServer.email),
+        subject,
+        text,
+        html,
+        attachments: mailAttachments,
+        headers: mailHeaders,
+      });
+
+      await recordServerSuccess(poolServer.id);
+
+      const log: EmailDeliveryRecord = {
+        id: `elog-${Date.now()}-${ticket.id}`,
+        attendeeId: ticket.attendeeId || ticket.id,
+        ticketId: ticket.id,
+        email: recipient,
+        senderEmail: poolServer.email,
+        attendeeName: ticket.attendeeName,
+        status: "delivered",
+        providerMessageId: info.messageId,
+        sentAt: new Date().toISOString(),
+        retryCount: 0,
+      };
+      await recordEmailDelivery(log);
+
+      return {
+        success: true,
+        messageId: info.messageId,
+        provider: "smtp_pool",
+        sentVia: poolServer.email,
+        serverId: poolServer.id,
+      };
+    } catch (err: any) {
+      console.error(`SMTP Pool server [${poolServer.email}] error:`, err);
+      await recordServerFailure(poolServer.id, err.message);
+
+      // Automatic Failover: Try next available active server in pool
+      const nextServer = await getNextAvailableEmailServer();
+      if (nextServer && nextServer.id !== poolServer.id && nextServer.password) {
+        console.log(`Failing over to next active server [${nextServer.email}]...`);
+        try {
+          const failoverTransporter = nodemailer.createTransport({
+            host: nextServer.host,
+            port: nextServer.port || 465,
+            secure: nextServer.secure !== false,
+            auth: {
+              user: nextServer.username,
+              pass: nextServer.password,
+            },
+            tls: { rejectUnauthorized: false },
+          });
+
+          const failoverFrom = `"${settings.fromName || nextServer.name || 'ملتقى الجيل القادم'}" <${nextServer.email}>`;
+          const failoverInfo = await failoverTransporter.sendMail({
+            from: failoverFrom,
+            to: recipient,
+            replyTo: nextServer.email,
+            subject,
+            text,
+            html,
+            attachments: mailAttachments,
+            headers: { "X-Entity-Ref-ID": `ticket-${ticket.id}` },
+          });
+
+          await recordServerSuccess(nextServer.id);
+
+          const log: EmailDeliveryRecord = {
+            id: `elog-${Date.now()}-${ticket.id}`,
+            attendeeId: ticket.attendeeId || ticket.id,
+            ticketId: ticket.id,
+            email: recipient,
+            senderEmail: nextServer.email,
+            attendeeName: ticket.attendeeName,
+            status: "delivered",
+            providerMessageId: failoverInfo.messageId,
+            sentAt: new Date().toISOString(),
+            retryCount: 1,
+          };
+          await recordEmailDelivery(log);
+
+          return {
+            success: true,
+            messageId: failoverInfo.messageId,
+            provider: "smtp_pool",
+            sentVia: nextServer.email,
+            serverId: nextServer.id,
+          };
+        } catch (failoverErr: any) {
+          await recordServerFailure(nextServer.id, failoverErr.message);
+        }
+      }
+
+      const log: EmailDeliveryRecord = {
+        id: `elog-${Date.now()}-${ticket.id}`,
+        attendeeId: ticket.attendeeId || ticket.id,
+        ticketId: ticket.id,
+        email: recipient,
+        senderEmail: poolServer.email,
+        attendeeName: ticket.attendeeName,
+        status: "failed",
+        errorMessage: err.message,
+        retryCount: 1,
+      };
+      await recordEmailDelivery(log);
+
+      return {
+        success: false,
+        error: `خطأ SMTP (${poolServer.email}): ${err.message}`,
+        provider: "smtp_pool",
+        sentVia: poolServer.email,
+        serverId: poolServer.id,
+      };
+    }
+  }
+
+  // 1. CUSTOM SMTP SENDER (Gmail App Password, Outlook, Custom Domain Fallback)
   if (settings.provider === "smtp" && settings.smtpHost && settings.smtpUser && settings.smtpPassword) {
     try {
       const transporter = nodemailer.createTransport({
@@ -323,6 +499,7 @@ export async function sendTicketEmail(
         attendeeId: ticket.attendeeId || ticket.id,
         ticketId: ticket.id,
         email: recipient,
+        senderEmail: settings.fromEmail || settings.smtpUser,
         attendeeName: ticket.attendeeName,
         status: "delivered",
         providerMessageId: info.messageId,
@@ -335,6 +512,7 @@ export async function sendTicketEmail(
         success: true,
         messageId: info.messageId,
         provider: "smtp",
+        sentVia: settings.fromEmail || settings.smtpUser,
       };
     } catch (err: any) {
       console.error("SMTP sending error:", err);
@@ -343,6 +521,7 @@ export async function sendTicketEmail(
         attendeeId: ticket.attendeeId || ticket.id,
         ticketId: ticket.id,
         email: recipient,
+        senderEmail: settings.fromEmail || settings.smtpUser,
         attendeeName: ticket.attendeeName,
         status: "failed",
         errorMessage: err.message,
@@ -354,6 +533,7 @@ export async function sendTicketEmail(
         success: false,
         error: `خطأ SMTP: ${err.message}`,
         provider: "smtp",
+        sentVia: settings.fromEmail || settings.smtpUser,
       };
     }
   }

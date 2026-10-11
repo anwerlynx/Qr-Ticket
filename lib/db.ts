@@ -1694,6 +1694,7 @@ export async function recordEmailDelivery(record: EmailDeliveryRecord) {
       retry_count: record.retryCount,
       sent_at: record.sentAt,
       delivered_at: record.deliveredAt,
+      sender_email: record.senderEmail,
     });
     return;
   }

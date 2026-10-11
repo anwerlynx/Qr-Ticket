@@ -179,6 +179,25 @@ export interface EmailSettings {
   delayBetweenEmailsMs?: number;
 }
 
+export interface EmailServer {
+  id: string;
+  name: string;
+  email: string;
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password?: string;
+  dailyLimit: number;
+  totalSent: number;
+  todaySent: number;
+  lastSentAt?: string;
+  status: "active" | "paused" | "limit_reached" | "error";
+  lastError?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface EmailDeliveryRecord {
   id: string;
   attendeeId: string;
@@ -191,6 +210,7 @@ export interface EmailDeliveryRecord {
   sentAt?: string;
   deliveredAt?: string;
   retryCount: number;
+  senderEmail?: string;
 }
 
 export interface EmailCampaignSummary {
