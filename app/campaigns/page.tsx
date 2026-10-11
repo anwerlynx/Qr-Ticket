@@ -301,14 +301,20 @@ export default function BulkEmailCampaignPage() {
   const toggleSelectAllFiltered = () => {
     if (selectedTicketIds.size >= filteredRecipients.length && filteredRecipients.length > 0) {
       setSelectedTicketIds(new Set());
+      setLastSelectedIdx(null);
     } else {
       setSelectedTicketIds(new Set(filteredRecipients.map((t) => t.id)));
+      setLastSelectedIdx(0);
     }
   };
 
   const handleToggleSelectRow = (ticketId: string, index: number, event: React.MouseEvent) => {
+    const isShift = Boolean(event.shiftKey);
     const next = new Set(selectedTicketIds);
-    if (event.shiftKey && lastSelectedIdx !== null) {
+
+    if (isShift && lastSelectedIdx !== null) {
+      // User pressed Shift and already has an anchor:
+      // Select all rows between the anchor and the current index!
       const start = Math.min(lastSelectedIdx, index);
       const end = Math.max(lastSelectedIdx, index);
       for (let i = start; i <= end; i++) {
@@ -316,15 +322,20 @@ export default function BulkEmailCampaignPage() {
           next.add(filteredRecipients[i].id);
         }
       }
+      setSelectedTicketIds(next);
     } else {
-      if (next.has(ticketId)) {
+      // Normal click, OR first click even if Shift was held
+      if (next.has(ticketId) && !isShift) {
         next.delete(ticketId);
+        if (lastSelectedIdx === index) {
+          setLastSelectedIdx(null);
+        }
       } else {
         next.add(ticketId);
+        setLastSelectedIdx(index);
       }
-      setLastSelectedIdx(index);
+      setSelectedTicketIds(next);
     }
-    setSelectedTicketIds(next);
   };
 
   const selectFirstN = (n: number) => {
@@ -1059,14 +1070,22 @@ export default function BulkEmailCampaignPage() {
                           return (
                             <tr
                               key={ticket.id}
-                              className={`transition-colors ${
-                                isSelected ? "bg-purple-50/70" : "hover:bg-[#fafafc]"
+                              onClick={(e) => {
+                                const target = e.target as HTMLElement;
+                                if (target.closest("button") && !target.closest(".checkbox-trigger")) return;
+                                handleToggleSelectRow(ticket.id, idx, e);
+                              }}
+                              className={`transition-colors select-none cursor-pointer ${
+                                isSelected ? "bg-purple-100/80 font-medium" : "hover:bg-[#fafafc]"
                               }`}
                             >
-                              <td className="p-2.5 text-center">
+                              <td className="p-2.5 text-center checkbox-trigger">
                                 <button
                                   type="button"
-                                  onClick={(e) => handleToggleSelectRow(ticket.id, idx, e)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleSelectRow(ticket.id, idx, e);
+                                  }}
                                   className="text-[#7a7a7a] hover:text-[#1d1d1f] cursor-pointer"
                                   title="تحديد الصف (اضغط Shift مع النقر لتحديد نطاق)"
                                 >

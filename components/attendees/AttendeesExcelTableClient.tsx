@@ -625,14 +625,18 @@ export default function AttendeesExcelTableClient({
   const toggleSelectAll = () => {
     if (selectedIds.size >= filteredAttendees.length && filteredAttendees.length > 0) {
       setSelectedIds(new Set());
+      setLastSelectedAttendeeIdx(null);
     } else {
       setSelectedIds(new Set(filteredAttendees.map((a) => a.id)));
+      setLastSelectedAttendeeIdx(0);
     }
   };
 
   const toggleSelect = (id: string, index?: number, event?: React.MouseEvent) => {
+    const isShift = Boolean(event?.shiftKey);
     const next = new Set(selectedIds);
-    if (event?.shiftKey && lastSelectedAttendeeIdx !== null && typeof index === "number") {
+
+    if (isShift && lastSelectedAttendeeIdx !== null && typeof index === "number") {
       const start = Math.min(lastSelectedAttendeeIdx, index);
       const end = Math.max(lastSelectedAttendeeIdx, index);
       for (let i = start; i <= end; i++) {
@@ -640,12 +644,19 @@ export default function AttendeesExcelTableClient({
           next.add(filteredAttendees[i].id);
         }
       }
+      setSelectedIds(next);
     } else {
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      if (typeof index === "number") setLastSelectedAttendeeIdx(index);
+      if (next.has(id) && !isShift) {
+        next.delete(id);
+        if (lastSelectedAttendeeIdx === index) {
+          setLastSelectedAttendeeIdx(null);
+        }
+      } else {
+        next.add(id);
+        if (typeof index === "number") setLastSelectedAttendeeIdx(index);
+      }
+      setSelectedIds(next);
     }
-    setSelectedIds(next);
   };
 
   const selectFirstNAttendees = (n: number) => {
@@ -1231,14 +1242,24 @@ export default function AttendeesExcelTableClient({
                     return (
                       <tr
                         key={att.id}
-                        className={`transition-colors hover:bg-[#fafafc] ${
-                          isSelected ? "bg-blue-50/50" : ""
+                        onClick={(e) => {
+                          const target = e.target as HTMLElement;
+                          if (target.closest("button") && !target.closest(".checkbox-trigger")) return;
+                          if (target.closest("a") || target.closest("input") || target.closest("select")) return;
+                          toggleSelect(att.id, idx, e);
+                        }}
+                        className={`transition-colors select-none cursor-pointer ${
+                          isSelected ? "bg-blue-100/70 font-medium" : "hover:bg-[#fafafc]"
                         }`}
                       >
                         {/* Checkbox */}
-                        <td className="p-3 text-center">
+                        <td className="p-3 text-center checkbox-trigger">
                           <button
-                            onClick={(e) => toggleSelect(att.id, idx, e)}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelect(att.id, idx, e);
+                            }}
                             className="text-[#7a7a7a] hover:text-[#1d1d1f] cursor-pointer"
                             title="تحديد الصف (اضغط Shift مع النقر لتحديد نطاق)"
                           >
