@@ -646,12 +646,14 @@ export default function AttendeesExcelTableClient({
     city: true,
     approval: true,
     ticket: true,
+    emailStatus: true,
     actions: true,
   });
 
   // Bulk Send Tickets to Selected Attendees State
   const [showSendSelectedModal, setShowSendSelectedModal] = useState(false);
   const [sendingSelected, setSendingSelected] = useState(false);
+  const [sendSelectedDelayMs, setSendSelectedDelayMs] = useState<number>(500);
   const [sendSelectedSummary, setSendSelectedSummary] = useState<{
     totalSelected: number;
     sentCount: number;
@@ -673,6 +675,7 @@ export default function AttendeesExcelTableClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           attendeeIds: Array.from(selectedIds),
+          delayMs: sendSelectedDelayMs,
         }),
       });
 
@@ -1028,6 +1031,7 @@ export default function AttendeesExcelTableClient({
                       { key: "city", label: "المحافظة / العنوان" },
                       { key: "approval", label: "حالة الحضور" },
                       { key: "ticket", label: "حالة التذكرة" },
+                      { key: "emailStatus", label: "حالة البريد (وصله / فشل)" },
                       { key: "actions", label: "الإجراءات والتعديل" },
                     ].map((col) => (
                       <label
@@ -1112,6 +1116,9 @@ export default function AttendeesExcelTableClient({
                   )}
                   {visibleColumns.ticket && (
                     <th className="p-3 font-semibold text-[#1d1d1f] text-center w-32">حالة التذكرة</th>
+                  )}
+                  {visibleColumns.emailStatus && (
+                    <th className="p-3 font-semibold text-[#1d1d1f] text-center w-32">حالة البريد</th>
                   )}
                   {visibleColumns.actions && (
                     <th className="p-3 font-semibold text-[#1d1d1f] text-center w-28">إجراءات</th>
@@ -1251,6 +1258,48 @@ export default function AttendeesExcelTableClient({
                             ) : (
                               <span className="text-[10px] text-[#7a7a7a] font-normal">
                                 لم تصدر بعد
+                              </span>
+                            )}
+                          </td>
+                        )}
+
+                        {/* EMAIL DELIVERY STATUS (وصله / فشل / لم يُرسل) */}
+                        {visibleColumns.emailStatus && (
+                          <td className="p-3 text-center">
+                            {att.emailStatus === "delivered" || att.emailStatus === "sent" ? (
+                              <div className="inline-flex flex-col items-center">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 text-[10.5px] font-semibold">
+                                  <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                                  <span>وصله ✓</span>
+                                </span>
+                                {att.emailSentAt && (
+                                  <span className="text-[9px] text-[#7a7a7a] mt-0.5" dir="ltr">
+                                    {new Date(att.emailSentAt).toLocaleTimeString("ar-EG", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })}
+                                  </span>
+                                )}
+                              </div>
+                            ) : att.emailStatus === "failed" ? (
+                              <div className="inline-flex flex-col items-center max-w-[130px] mx-auto">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
+                                  <XCircle className="h-3 w-3 text-red-600" />
+                                  <span>فشل ✕</span>
+                                </span>
+                                {att.emailError && (
+                                  <span
+                                    className="text-[9px] text-red-600 truncate max-w-[110px] mt-0.5"
+                                    title={att.emailError}
+                                  >
+                                    {att.emailError}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 text-neutral-500 px-2 py-0.5 text-[10px] font-normal">
+                                <Clock className="h-2.5 w-2.5" />
+                                <span>لم يُرسل</span>
                               </span>
                             )}
                           </td>
@@ -1891,6 +1940,38 @@ export default function AttendeesExcelTableClient({
                       </div>
                     ))}
                   </div>
+                </div>
+
+                {/* Configurable Delay Control */}
+                <div className="rounded-xl bg-[#f5f5f7] p-3 border border-[#e5e5e7] space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-[#1d1d1f]">الفاصل الزمني بين الرسائل (Delay):</span>
+                    <span className="font-mono font-bold text-[#6c12e8]">{sendSelectedDelayMs} ms</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {[
+                      { label: "250ms", val: 250 },
+                      { label: "500ms (موصى به)", val: 500 },
+                      { label: "1 ثانية", val: 1000 },
+                      { label: "2 ثانية", val: 2000 },
+                    ].map((item) => (
+                      <button
+                        key={item.val}
+                        type="button"
+                        onClick={() => setSendSelectedDelayMs(item.val)}
+                        className={`text-[11px] py-1 px-2.5 rounded-lg font-medium border transition-all cursor-pointer ${
+                          sendSelectedDelayMs === item.val
+                            ? "bg-[#6c12e8] text-white border-[#6c12e8]"
+                            : "bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-[#7a7a7a]">
+                    فاصل زمني آمن لتجنب حظر البريد وضمان وصول كل رسالة بنجاح إلى صندوق الوارد (Inbox).
+                  </p>
                 </div>
 
                 {/* Action Buttons */}

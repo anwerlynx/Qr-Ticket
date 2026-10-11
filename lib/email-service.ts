@@ -7,6 +7,7 @@ import { renderNextGenTicketEmailHtml } from "@/components/tickets/NextGenTicket
 import { formatQRPayload, generateQRCodeBuffer } from "./qr";
 import { getEventSettings } from "./event-settings";
 import { recordEmailDelivery } from "./db";
+import { isSupabaseConfigured, getSupabaseAdmin } from "./supabase";
 
 const SETTINGS_FILE = path.join(process.cwd(), "data", "email_settings.json");
 
@@ -16,29 +17,73 @@ const DEFAULT_SETTINGS: EmailSettings = {
   fromEmail: process.env.RESEND_FROM_EMAIL || "info@primexagency.com",
   replyTo: "support@primexagency.com",
   enableRateLimiting: true,
-  delayBetweenEmailsMs: 250,
+  delayBetweenEmailsMs: 500,
 };
 
+let inMemoryEmailSettings: EmailSettings | null = null;
+let lastSettingsFetchTime = 0;
+const SETTINGS_CACHE_TTL = 2000;
+
 /**
- * Loads configured email settings from disk or environment variables
+ * Loads configured email settings from Supabase database, disk, or environment variables
  */
 export async function getEmailSettings(): Promise<EmailSettings> {
-  if (inMemoryEmailSettings) {
+  const now = Date.now();
+  if (inMemoryEmailSettings && now - lastSettingsFetchTime < SETTINGS_CACHE_TTL) {
     return inMemoryEmailSettings;
   }
 
+  // 1. Primary Source: Supabase public.email_settings
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin();
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("email_settings")
+          .select("*")
+          .eq("id", "default")
+          .maybeSingle();
+
+        if (!error && data) {
+          const dbSettings: EmailSettings = {
+            provider: (data.provider || "mock") as any,
+            fromName: data.from_name || DEFAULT_SETTINGS.fromName,
+            fromEmail: data.from_email || DEFAULT_SETTINGS.fromEmail,
+            replyTo: data.reply_to || DEFAULT_SETTINGS.replyTo,
+            smtpHost: data.smtp_host || undefined,
+            smtpPort: data.smtp_port ? Number(data.smtp_port) : 465,
+            smtpSecure: data.smtp_secure !== false,
+            smtpUser: data.smtp_user || undefined,
+            smtpPassword: data.smtp_password || undefined,
+            resendApiKey: data.resend_api_key || undefined,
+            resendFromEmail: data.resend_from_email || undefined,
+            enableRateLimiting: data.enable_rate_limiting !== false,
+            delayBetweenEmailsMs: data.delay_between_emails_ms ?? 500,
+          };
+          inMemoryEmailSettings = dbSettings;
+          lastSettingsFetchTime = now;
+          return dbSettings;
+        }
+      }
+    } catch (err) {
+      console.warn("Could not query Supabase email_settings, checking fallback:", err);
+    }
+  }
+
+  // 2. Secondary Source: Local JSON disk
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       const content = fs.readFileSync(SETTINGS_FILE, "utf-8");
       const saved = JSON.parse(content) as EmailSettings;
       inMemoryEmailSettings = { ...DEFAULT_SETTINGS, ...saved };
+      lastSettingsFetchTime = now;
       return inMemoryEmailSettings;
     }
   } catch (err) {
     // Read-only or file missing
   }
 
-  // Fallback to env vars if available
+  // 3. Environment variables fallback
   if (process.env.RESEND_API_KEY) {
     return {
       ...DEFAULT_SETTINGS,
@@ -79,10 +124,8 @@ export async function isEmailConfigured(): Promise<boolean> {
   return false;
 }
 
-let inMemoryEmailSettings: EmailSettings | null = null;
-
 /**
- * Saves email settings to disk with in-memory fallback
+ * Saves email settings to Supabase database (and disk/in-memory fallback)
  */
 export async function saveEmailSettings(settings: Partial<EmailSettings>): Promise<EmailSettings> {
   const current = await getEmailSettings();
@@ -91,7 +134,37 @@ export async function saveEmailSettings(settings: Partial<EmailSettings>): Promi
     ...settings,
   };
   inMemoryEmailSettings = updated;
+  lastSettingsFetchTime = Date.now();
 
+  // 1. Persist directly to Supabase PostgreSQL table: email_settings
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin();
+      if (supabase) {
+        await supabase.from("email_settings").upsert({
+          id: "default",
+          provider: updated.provider,
+          from_name: updated.fromName || null,
+          from_email: updated.fromEmail || null,
+          reply_to: updated.replyTo || null,
+          smtp_host: updated.smtpHost || null,
+          smtp_port: updated.smtpPort ? Number(updated.smtpPort) : 465,
+          smtp_secure: updated.smtpSecure !== false,
+          smtp_user: updated.smtpUser || null,
+          smtp_password: updated.smtpPassword || null,
+          resend_api_key: updated.resendApiKey || null,
+          resend_from_email: updated.resendFromEmail || null,
+          enable_rate_limiting: updated.enableRateLimiting !== false,
+          delay_between_emails_ms: updated.delayBetweenEmailsMs ? Number(updated.delayBetweenEmailsMs) : 500,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.error("Failed to save email settings in Supabase:", err);
+    }
+  }
+
+  // 2. Local disk fallback
   try {
     const dir = path.dirname(SETTINGS_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -171,7 +244,7 @@ export async function sendTicketEmail(
   const heroPath = path.join(process.cwd(), "public", "images", "ticket_hero_art1.png");
   const hasHeroPath = fs.existsSync(heroPath);
 
-  const eventSettings = getEventSettings();
+  const eventSettings = await getEventSettings();
   const html = await renderNextGenTicketEmailHtml(ticket, {
     hostUrl,
     qrImgSrc: "cid:ticket_qr_barcode",
@@ -352,6 +425,18 @@ export async function sendTicketEmail(
         provider: "resend",
       };
     } catch (err: any) {
+      const log: EmailDeliveryRecord = {
+        id: `elog-${Date.now()}-${ticket.id}`,
+        attendeeId: ticket.attendeeId || ticket.id,
+        ticketId: ticket.id,
+        email: recipient,
+        attendeeName: ticket.attendeeName,
+        status: "failed",
+        errorMessage: err.message,
+        retryCount: 1,
+      };
+      await recordEmailDelivery(log);
+
       return {
         success: false,
         error: `خطأ Resend: ${err.message}`,

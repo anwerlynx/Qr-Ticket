@@ -45,10 +45,14 @@ export async function POST(request: Request) {
     }
 
     // 2. Bulk Batch Sending Mode
+    const { onlyUnsent = false, delayMs: customDelayMs } = body;
     const allTickets = await getAllTickets();
     const targetTickets = allTickets.filter((t) => {
       if (ticketIds && Array.isArray(ticketIds)) {
         return ticketIds.includes(t.id);
+      }
+      if (onlyUnsent && (t.emailStatus === "delivered" || t.emailStatus === "sent")) {
+        return false;
       }
       return t.status === "valid";
     });
@@ -57,20 +61,47 @@ export async function POST(request: Request) {
     let sentCount = 0;
     let failedCount = 0;
     const failures: Array<{ ticketId: string; email: string; error: string }> = [];
+    const results: Array<{
+      ticketId: string;
+      attendeeId?: string;
+      attendeeName: string;
+      email: string;
+      status: "delivered" | "failed";
+      error?: string;
+      sentAt: string;
+    }> = [];
 
-    const delayMs = settings.delayBetweenEmailsMs || 200;
+    const delayMs = typeof customDelayMs === "number" ? customDelayMs : (settings.delayBetweenEmailsMs ?? 500);
 
     for (let i = 0; i < batch.length; i++) {
       const ticket = batch[i];
+      const now = new Date().toISOString();
       const res = await sendTicketEmail(ticket, { hostUrl });
       if (res.success) {
         sentCount++;
+        results.push({
+          ticketId: ticket.id,
+          attendeeId: ticket.attendeeId,
+          attendeeName: ticket.attendeeName,
+          email: ticket.attendeeEmail || "",
+          status: "delivered",
+          sentAt: now,
+        });
       } else {
         failedCount++;
         failures.push({
           ticketId: ticket.id,
           email: ticket.attendeeEmail || "",
-          error: res.error || "Unknown error",
+          error: res.error || "فشل إرسال البريد",
+        });
+        results.push({
+          ticketId: ticket.id,
+          attendeeId: ticket.attendeeId,
+          attendeeName: ticket.attendeeName,
+          email: ticket.attendeeEmail || "",
+          status: "failed",
+          error: res.error,
+          sentAt: now,
         });
       }
 
@@ -89,6 +120,8 @@ export async function POST(request: Request) {
       failedCount,
       remainingCount,
       failures,
+      results,
+      delayUsedMs: delayMs,
       provider: settings.provider,
       mockMode: settings.provider === "mock",
     });

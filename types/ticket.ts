@@ -49,6 +49,11 @@ export interface TicketData {
   checkedInAt?: string;
   checkInStation?: string;
   checkInNotes?: string;
+
+  // Email delivery state
+  emailStatus?: "pending" | "sent" | "delivered" | "failed";
+  emailSentAt?: string;
+  emailError?: string;
 }
 
 export interface EventTicketSettings {
@@ -93,6 +98,9 @@ export interface AttendeeRecord {
   faculty?: string; // اسم الجهه / الكلية
   referralSource?: string; // عرفت الايفنت منين
   timestamp?: string; // طابع زمني
+  emailStatus?: "pending" | "sent" | "delivered" | "failed";
+  emailSentAt?: string;
+  emailError?: string;
   customFields?: Record<string, any>;
   createdAt: string;
   updatedAt: string;

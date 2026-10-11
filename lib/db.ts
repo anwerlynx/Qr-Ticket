@@ -162,7 +162,8 @@ export async function getAllAttendees(forceRefresh: boolean = false): Promise<At
       .from("attendees")
       .select(`
         id, name, email, phone, registration_id, category, registered_at, status, custom_fields, created_at, updated_at,
-        tickets ( id, ticket_number )
+        email_status, email_sent_at, email_error,
+        tickets ( id, ticket_number, email_status, email_sent_at, email_error )
       `)
       .order("created_at", { ascending: false });
 
@@ -183,6 +184,10 @@ export async function getAllAttendees(forceRefresh: boolean = false): Promise<At
           ticketId: Array.isArray(row.tickets) ? row.tickets[0]?.id : row.tickets?.id,
           ticketNumber: Array.isArray(row.tickets) ? row.tickets[0]?.ticket_number : row.tickets?.ticket_number,
           status: row.status,
+          approvalStatus: (row.status === "rejected" ? "rejected" : (row.approval_status || "accepted")) as any,
+          emailStatus: (row.email_status || (Array.isArray(row.tickets) ? row.tickets[0]?.email_status : row.tickets?.email_status) || "pending") as any,
+          emailSentAt: row.email_sent_at || (Array.isArray(row.tickets) ? row.tickets[0]?.email_sent_at : row.tickets?.email_sent_at),
+          emailError: row.email_error || (Array.isArray(row.tickets) ? row.tickets[0]?.email_error : row.tickets?.email_error),
           customFields: row.custom_fields,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
@@ -194,9 +199,12 @@ export async function getAllAttendees(forceRefresh: boolean = false): Promise<At
   }
 
   // Local fallback
-  result = readJson<AttendeeRecord[]>(ATTENDEES_FILE, INITIAL_ATTENDEES).filter(
-    (a) => a.category !== ("Staff_Scanner" as any)
-  );
+  result = readJson<AttendeeRecord[]>(ATTENDEES_FILE, INITIAL_ATTENDEES)
+    .filter((a) => a.category !== ("Staff_Scanner" as any))
+    .map((a) => ({
+      ...a,
+      emailStatus: a.emailStatus || "pending",
+    }));
   cachedAttendees = result;
   lastAttendeesCacheTime = now;
   return result;
@@ -690,12 +698,14 @@ export async function importAttendeesBulk(
 // -------------------------------------------------------------
 // TICKETS OPERATIONS
 // -------------------------------------------------------------
+// -------------------------------------------------------------
 export async function getAllTickets(forceRefresh: boolean = false): Promise<TicketData[]> {
   const now = Date.now();
   if (!forceRefresh && cachedTickets && now - lastTicketsCacheTime < TICKETS_CACHE_TTL) {
     return cachedTickets;
   }
 
+  const eventSettings = await getEventSettings();
   let result: TicketData[] = [];
 
   if (await isSupabaseReady()) {
@@ -718,18 +728,35 @@ export async function getAllTickets(forceRefresh: boolean = false): Promise<Tick
         attendeeEmail: t.attendees?.email,
         attendeePhone: t.attendees?.phone,
         category: t.attendees?.category || "General",
-        eventName: t.event_name,
-        eventTagline: t.event_tagline,
-        eventDate: t.event_date,
-        eventTime: t.event_time,
-        venueName: t.venue_name,
-        venueAddress: t.venue_address,
-        mapUrl: t.map_url,
-        entryInstructions: t.entry_instructions,
-        organizerName: t.organizer_name,
-        contactEmail: t.contact_email,
-        contactPhone: t.contact_phone,
+        eventName: t.event_name || eventSettings.eventName,
+        eventTagline: t.event_tagline || eventSettings.eventTagline,
+        eventDate: t.event_date || eventSettings.eventDate,
+        eventTime: t.event_time || eventSettings.eventTime,
+        venueName: t.venue_name || eventSettings.venueName,
+        venueAddress: t.venue_address || eventSettings.venueAddress,
+        mapUrl: t.map_url !== undefined && t.map_url !== null ? t.map_url : eventSettings.mapUrl,
+        greetingTitle: eventSettings.greetingTitle,
+        greetingSubtitle: eventSettings.greetingSubtitle,
+        greetingDescription: eventSettings.greetingDescription,
+        facebookUrl: eventSettings.facebookUrl,
+        twitterUrl: eventSettings.twitterUrl,
+        instagramUrl: eventSettings.instagramUrl,
+        showFacebook: eventSettings.showFacebook,
+        showTwitter: eventSettings.showTwitter,
+        showInstagram: eventSettings.showInstagram,
+        copyrightText: eventSettings.copyrightText,
+        entryInstructions: t.entry_instructions || [
+          "يرجى إبراز هذا الرمز (QR Code) عند بوابة الدخول للتحقق.",
+          "التذكرة مخصصة لشخص واحد فقط وغير قابلة لإعادة الاستخدام.",
+          "تفتح الأبواب قبل بدء الفعالية بساعة واحدة.",
+        ],
+        organizerName: t.organizer_name || eventSettings.organizerName,
+        contactEmail: t.contact_email || "info@primexagency.com",
+        contactPhone: t.contact_phone || "+20 100 000 0000",
         status: t.status,
+        emailStatus: (t.email_status || "pending") as any,
+        emailSentAt: t.email_sent_at,
+        emailError: t.email_error,
         issuedAt: t.issued_at,
         checkedInAt: t.checked_in_at,
         checkInStation: t.check_in_station,
@@ -741,7 +768,28 @@ export async function getAllTickets(forceRefresh: boolean = false): Promise<Tick
     }
   }
 
-  result = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
+  result = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS).map((t) => ({
+    ...t,
+    eventName: t.eventName || eventSettings.eventName,
+    eventTagline: t.eventTagline || eventSettings.eventTagline,
+    eventDate: t.eventDate || eventSettings.eventDate,
+    eventTime: t.eventTime || eventSettings.eventTime,
+    venueName: t.venueName || eventSettings.venueName,
+    venueAddress: t.venueAddress || eventSettings.venueAddress,
+    mapUrl: t.mapUrl || eventSettings.mapUrl,
+    greetingTitle: t.greetingTitle || eventSettings.greetingTitle,
+    greetingSubtitle: t.greetingSubtitle || eventSettings.greetingSubtitle,
+    greetingDescription: t.greetingDescription || eventSettings.greetingDescription,
+    facebookUrl: t.facebookUrl ?? eventSettings.facebookUrl,
+    twitterUrl: t.twitterUrl ?? eventSettings.twitterUrl,
+    instagramUrl: t.instagramUrl ?? eventSettings.instagramUrl,
+    showFacebook: t.showFacebook ?? eventSettings.showFacebook,
+    showTwitter: t.showTwitter ?? eventSettings.showTwitter,
+    showInstagram: t.showInstagram ?? eventSettings.showInstagram,
+    copyrightText: t.copyrightText || eventSettings.copyrightText,
+    organizerName: t.organizerName || eventSettings.organizerName,
+    emailStatus: t.emailStatus || "pending",
+  }));
   cachedTickets = result;
   lastTicketsCacheTime = now;
   return result;
@@ -801,7 +849,7 @@ export async function issueBulkTickets(attendeeIds?: string[]): Promise<BulkIssu
       const secureCredential = generateSecureCredential();
       const ticketId = `ng-ticket-${ticketNumber.toLowerCase()}`;
 
-      const eventSettings = getEventSettings();
+      const eventSettings = await getEventSettings();
       const newTicket: TicketData = {
         id: ticketId,
         ticketNumber,
@@ -934,7 +982,7 @@ export async function issueTicket(params: {
   const id = `ng-ticket-${ticketNumber.toLowerCase()}`;
   const now = new Date().toISOString();
 
-  const eventSettings = getEventSettings();
+  const eventSettings = await getEventSettings();
   const newTicket: TicketData = {
     id,
     ticketNumber,
@@ -1000,7 +1048,7 @@ export async function registerAndIssueSingleAttendee(params: {
   const secureCredential = generateSecureCredential();
   const ticketId = `ng-ticket-${ticketNumber.toLowerCase()}`;
 
-  const eventSettings = getEventSettings();
+  const eventSettings = await getEventSettings();
   const newTicket: TicketData = {
     id: ticketId,
     ticketNumber,
@@ -1112,34 +1160,72 @@ export async function updateTicket(
   ticketId: string,
   updates: Partial<TicketData>
 ): Promise<TicketData | null> {
-  const currentTickets = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
-  const index = currentTickets.findIndex(
+  const currentTickets = await getAllTickets(true);
+  const target = currentTickets.find(
     (t) => t.id === ticketId || t.ticketNumber.toLowerCase() === ticketId.toLowerCase()
   );
-  if (index === -1) return null;
+  if (!target) return null;
 
-  const existing = currentTickets[index];
+  const realId = target.id;
   const updated: TicketData = {
-    ...existing,
+    ...target,
     ...updates,
   };
-  currentTickets[index] = updated;
-  writeJson(DB_FILE, currentTickets);
 
-  // If attendee name or category was updated, update attendee record as well
-  if (updated.attendeeId || updated.attendeeEmail) {
-    const attendees = readJson<AttendeeRecord[]>(ATTENDEES_FILE, INITIAL_ATTENDEES);
-    const attIndex = attendees.findIndex(
-      (a) => a.id === updated.attendeeId || a.email.toLowerCase() === updated.attendeeEmail?.toLowerCase()
-    );
-    if (attIndex !== -1) {
-      if (updates.attendeeName) attendees[attIndex].name = updates.attendeeName;
-      if (updates.category) attendees[attIndex].category = updates.category;
-      attendees[attIndex].updatedAt = new Date().toISOString();
-      writeJson(ATTENDEES_FILE, attendees);
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin()!;
+      const ticketUpdate: Record<string, any> = {};
+      if (updates.ticketNumber) ticketUpdate.ticket_number = updates.ticketNumber;
+      if (updates.eventName) ticketUpdate.event_name = updates.eventName;
+      if (updates.eventTagline) ticketUpdate.event_tagline = updates.eventTagline;
+      if (updates.eventDate) ticketUpdate.event_date = updates.eventDate;
+      if (updates.eventTime) ticketUpdate.event_time = updates.eventTime;
+      if (updates.venueName) ticketUpdate.venue_name = updates.venueName;
+      if (updates.venueAddress) ticketUpdate.venue_address = updates.venueAddress;
+      if (updates.mapUrl !== undefined) ticketUpdate.map_url = updates.mapUrl;
+      if (updates.organizerName) ticketUpdate.organizer_name = updates.organizerName;
+      if (updates.status) ticketUpdate.status = updates.status;
+
+      if (Object.keys(ticketUpdate).length > 0) {
+        await supabase.from("tickets").update(ticketUpdate).eq("id", realId);
+      }
+
+      // If attendee name or category was updated, update attendees table
+      if (target.attendeeId && (updates.attendeeName || updates.category)) {
+        const attUpdate: Record<string, any> = {};
+        if (updates.attendeeName) attUpdate.name = updates.attendeeName;
+        if (updates.category) attUpdate.category = updates.category;
+        await supabase.from("attendees").update(attUpdate).eq("id", target.attendeeId);
+      }
+    } catch (err) {
+      console.error("Supabase updateTicket error:", err);
     }
   }
 
+  // Local fallback
+  try {
+    const rawTickets = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
+    const idx = rawTickets.findIndex((t) => t.id === realId || t.ticketNumber === target.ticketNumber);
+    if (idx !== -1) {
+      rawTickets[idx] = updated;
+      writeJson(DB_FILE, rawTickets);
+    }
+
+    if (target.attendeeId) {
+      const rawAttendees = readJson<AttendeeRecord[]>(ATTENDEES_FILE, INITIAL_ATTENDEES);
+      const aIdx = rawAttendees.findIndex((a) => a.id === target.attendeeId);
+      if (aIdx !== -1) {
+        if (updates.attendeeName) rawAttendees[aIdx].name = updates.attendeeName;
+        if (updates.category) rawAttendees[aIdx].category = updates.category;
+        rawAttendees[aIdx].updatedAt = new Date().toISOString();
+        writeJson(ATTENDEES_FILE, rawAttendees);
+      }
+    }
+  } catch {}
+
+  invalidateTicketsCache();
+  invalidateAttendeesCache();
   return updated;
 }
 
@@ -1215,10 +1301,42 @@ export async function deleteTicket(ticketId: string): Promise<boolean> {
 export async function updateAllTicketsWithEventSettings(
   settings: Partial<import("@/types/ticket").EventTicketSettings>
 ): Promise<number> {
-  const currentTickets = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
   let updatedCount = 0;
+
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin()!;
+      const updateData: Record<string, any> = {};
+      if (settings.eventName) updateData.event_name = settings.eventName;
+      if (settings.eventTagline) updateData.event_tagline = settings.eventTagline;
+      if (settings.eventDate) updateData.event_date = settings.eventDate;
+      if (settings.eventTime) updateData.event_time = settings.eventTime;
+      if (settings.venueName) updateData.venue_name = settings.venueName;
+      if (settings.venueAddress) updateData.venue_address = settings.venueAddress;
+      if (settings.mapUrl !== undefined) updateData.map_url = settings.mapUrl;
+      if (settings.organizerName) updateData.organizer_name = settings.organizerName;
+      if (settings.contactEmail) updateData.contact_email = settings.contactEmail;
+      if (settings.contactPhone) updateData.contact_phone = settings.contactPhone;
+
+      if (Object.keys(updateData).length > 0) {
+        const { data, error } = await supabase
+          .from("tickets")
+          .update(updateData)
+          .neq("id", "00000000-0000-0000-0000-000000000000")
+          .select("id");
+
+        if (!error && data) {
+          updatedCount = data.length;
+        }
+      }
+    } catch (err) {
+      console.error("Supabase updateAllTicketsWithEventSettings error:", err);
+    }
+  }
+
+  const currentTickets = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
   const updated = currentTickets.map((t) => {
-    updatedCount++;
+    if (!updatedCount) updatedCount++;
     return {
       ...t,
       ...(settings.eventName ? { eventName: settings.eventName } : {}),
@@ -1242,6 +1360,8 @@ export async function updateAllTicketsWithEventSettings(
     };
   });
   writeJson(DB_FILE, updated);
+
+  invalidateTicketsCache();
   return updatedCount;
 }
 
@@ -1485,7 +1605,81 @@ export async function getEmailLogs(): Promise<EmailDeliveryRecord[]> {
   return readJson<EmailDeliveryRecord[]>(EMAIL_LOGS_FILE, []);
 }
 
+export async function updateAttendeeAndTicketEmailStatus(params: {
+  attendeeId?: string;
+  ticketId?: string;
+  status: "pending" | "sent" | "delivered" | "failed";
+  errorMessage?: string;
+  sentAt?: string;
+}) {
+  const sentAt = params.sentAt || new Date().toISOString();
+
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseAdmin()!;
+      if (params.ticketId) {
+        await supabase
+          .from("tickets")
+          .update({
+            email_status: params.status,
+            email_sent_at: sentAt,
+            email_error: params.errorMessage || null,
+          })
+          .eq("id", params.ticketId);
+      }
+      if (params.attendeeId) {
+        await supabase
+          .from("attendees")
+          .update({
+            email_status: params.status,
+            email_sent_at: sentAt,
+            email_error: params.errorMessage || null,
+          })
+          .eq("id", params.attendeeId);
+      }
+    } catch (err) {
+      console.error("Error updating email status in Supabase:", err);
+    }
+  }
+
+  // Local fallback
+  try {
+    if (params.ticketId) {
+      const tickets = readJson<TicketData[]>(DB_FILE, INITIAL_TICKETS);
+      const tIndex = tickets.findIndex((t) => t.id === params.ticketId);
+      if (tIndex !== -1) {
+        tickets[tIndex].emailStatus = params.status;
+        tickets[tIndex].emailSentAt = sentAt;
+        tickets[tIndex].emailError = params.errorMessage;
+        writeJson(DB_FILE, tickets);
+      }
+    }
+    if (params.attendeeId) {
+      const attendees = readJson<AttendeeRecord[]>(ATTENDEES_FILE, INITIAL_ATTENDEES);
+      const aIndex = attendees.findIndex((a) => a.id === params.attendeeId);
+      if (aIndex !== -1) {
+        attendees[aIndex].emailStatus = params.status;
+        attendees[aIndex].emailSentAt = sentAt;
+        attendees[aIndex].emailError = params.errorMessage;
+        writeJson(ATTENDEES_FILE, attendees);
+      }
+    }
+  } catch {}
+
+  invalidateAttendeesCache();
+  invalidateTicketsCache();
+}
+
 export async function recordEmailDelivery(record: EmailDeliveryRecord) {
+  // Automatically update attendee and ticket delivery status columns
+  await updateAttendeeAndTicketEmailStatus({
+    attendeeId: record.attendeeId,
+    ticketId: record.ticketId,
+    status: record.status as any,
+    errorMessage: record.errorMessage,
+    sentAt: record.sentAt || new Date().toISOString(),
+  });
+
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseAdmin()!;
     await supabase.from("email_logs").insert({

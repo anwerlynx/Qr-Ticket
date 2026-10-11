@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { getAllAttendees, getTicketById, issueTicket, updateAttendee, getAllTickets } from "@/lib/db";
-import { sendTicketEmail } from "@/lib/email-service";
+import { sendTicketEmail, getEmailSettings } from "@/lib/email-service";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { attendeeIds } = body;
+    const { attendeeIds, delayMs: customDelayMs } = body;
 
     if (!attendeeIds || !Array.isArray(attendeeIds) || attendeeIds.length === 0) {
       return NextResponse.json(
@@ -15,6 +15,9 @@ export async function POST(request: Request) {
     }
 
     const hostUrl = new URL(request.url).origin;
+    const settings = await getEmailSettings();
+    const delayMs = typeof customDelayMs === "number" ? customDelayMs : (settings.delayBetweenEmailsMs ?? 500);
+
     const allAttendees = await getAllAttendees();
     const allTickets = await getAllTickets();
 
@@ -102,8 +105,10 @@ export async function POST(request: Request) {
           });
         }
 
-        // Small rate limit delay between emails
-        await new Promise((r) => setTimeout(r, 200));
+        // Rate limit delay between emails
+        if (delayMs > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
       } catch (err: any) {
         failedCount++;
         results.push({
