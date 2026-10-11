@@ -302,10 +302,15 @@ export async function sendTicketEmail(
         mailHeaders["List-Unsubscribe"] = `<mailto:${settings.replyTo}?subject=unsubscribe>`;
       }
 
+      const senderAddress = settings.fromEmail || settings.smtpUser;
+      const effectiveReplyTo = isPersonalGmail
+        ? senderAddress
+        : (settings.replyTo || senderAddress);
+
       const info = await transporter.sendMail({
         from: fromAddress,
         to: recipient,
-        replyTo: settings.replyTo || settings.fromEmail || settings.smtpUser,
+        replyTo: effectiveReplyTo,
         subject,
         text,
         html,
